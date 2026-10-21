@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Taxiff · Taxi</title>
+<link rel="stylesheet" href="/web/estilo.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<header><a href="/" class="m">‹ Todos los taxis</a><h1 id="titulo">Taxi</h1><span id="pill"></span></header>
+<main class="dos">
+  <section>
+    <div class="card">
+      <canvas id="vista"></canvas>
+      <p class="m" id="pie"></p>
+      <div class="fila botones">
+        <button id="editar">Dibujar jaula</button>
+        <button id="guardarJaula" hidden>Guardar jaula</button>
+        <button id="borrarJaula" class="fantasma" hidden>Quitar jaula</button>
+        <button id="cancelar" class="fantasma" hidden>Cancelar</button>
+      </div>
+      <p class="m" id="ayudaJaula" hidden>Toca la imagen para marcar las esquinas de la cabina (al menos 3). Solo se cuentan las personas dentro.</p>
+    </div>
+  </section>
+  <aside>
+    <div class="card k">
+      <div><b id="pax">0</b><span>pasajeros (servidor)</span></div>
+      <div><b id="paxEsp">0</b><span>según la cámara</span></div>
+      <div><b id="tiempo">00:00</b><span>carrera</span></div>
+      <div><b id="hoy">0</b><span>carreras hoy</span></div>
+    </div>
+    <div class="card">
+      <label class="m">Nombre del taxi (placa, conductor…)<br><input id="nombre"></label>
+      <div class="fila botones"><button id="guardarNombre">Guardar</button>
+        <button id="aprobar" class="fantasma"></button></div>
+      <p class="m" id="info"></p>
+      <button id="token" class="fantasma">Permitir que la cámara se registre de nuevo</button>
+    </div>
+    <div class="card"><div class="m">Carreras</div><table id="carreras"></table></div>
+  </aside>
+</main>
+<script src="/web/comun.js"></script>
+<script>
+const id = location.pathname.split('/').pop();
+const cv = $('vista'), cx = cv.getContext('2d');
+let datos = null, img = new Image(), fotoActual = '', editando = false, puntos = [];
+
+function dibujar() {
+  if (!img.naturalWidth) return;
+  cv.width = img.naturalWidth * 2; cv.height = img.naturalHeight * 2;
+  cx.drawImage(img, 0, 0, cv.width, cv.height);
+  const W = cv.width, H = cv.height;
+  const jaula = editando ? puntos : (datos?.jaula || []);
+  if (jaula.length) {
+    cx.beginPath(); jaula.forEach(([x, y], i) => i ? cx.lineTo(x * W, y * H) : cx.moveTo(x * W, y * H));
+    if (jaula.length > 2) cx.closePath();
+    cx.fillStyle = 'rgba(255,159,10,.12)'; cx.fill();
+    cx.strokeStyle = '#ff9f0a'; cx.lineWidth = 4; cx.stroke();
+    jaula.forEach(([x, y]) => { cx.beginPath(); cx.arc(x * W, y * H, 9, 0, 7); cx.fillStyle = '#ff9f0a'; cx.fill(); });
+  }
+  if (!editando && datos?.ultima) {
+    cx.font = 'bold 22px system-ui'; cx.lineWidth = 4;
+    for (const [x1, y1, x2, y2, p, dentro] of datos.ultima.dets) {
+      const col = dentro ? '#30c26b' : '#8a8a90';
+      cx.strokeStyle = cx.fillStyle = col;
+      cx.strokeRect(x1 * W, y1 * H, (x2 - x1) * W, (y2 - y1) * H);
+      const t = (dentro ? 'pasajero ' : 'fuera ') + Math.round(p * 100) + '%';
+      const w = cx.measureText(t).width + 12;
+      cx.fillRect(x1 * W, Math.max(0, y1 * H - 28), w, 26);
+      cx.fillStyle = '#000'; cx.fillText(t, x1 * W + 6, Math.max(20, y1 * H - 8));
+    }
+  }
+}
+img.onload = dibujar;
+
+cv.onclick = e => {
+  if (!editando) return;
+  const r = cv.getBoundingClientRect();
+  puntos.push([(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height].map(v => +v.toFixed(4)));
+  dibujar();
+};
+
+function modoEdicion(on) {
+  editando = on; puntos = on ? [] : puntos;
+  for (const b of ['guardarJaula', 'cancelar', 'ayudaJaula']) $(b).hidden = !on;
+  $('borrarJaula').hidden = !on; $('editar').hidden = on;
+  dibujar();
+}
+$('editar').onclick = () => modoEdicion(true);
+$('cancelar').onclick = () => modoEdicion(false);
+$('guardarJaula').onclick = async () => {
+  if (puntos.length < 3) { alert('Marca al menos 3 esquinas.'); return; }
+  await api('/api/panel/taxi/' + id, { jaula: puntos }); datos.jaula = puntos; modoEdicion(false);
+};
+$('borrarJaula').onclick = async () => {
+  await api('/api/panel/taxi/' + id, { jaula: [] }); datos.jaula = []; modoEdicion(false);
+};
+$('guardarNombre').onclick = () => api('/api/panel/taxi/' + id, { nombre: $('nombre').value });
+$('aprobar').onclick = () => api('/api/panel/taxi/' + id, { aprobado: !datos.aprobado }).then(cargar);
+$('token').onclick = () => {
+  if (confirm('La cámara podrá pedir un token nuevo. Úsalo si se reinstaló o se borró su memoria.'))
+    api('/api/panel/taxi/' + id, { reiniciar_token: true });
+};
+
+async function cargar() {
+  try {
+    datos = await api('/api/panel/taxi/' + id);
+    $('titulo').textContent = datos.nombre || datos.id;
+    $('pill').innerHTML = pill(datos);
+    if (document.activeElement !== $('nombre')) $('nombre').value = datos.nombre || '';
+    $('pax').textContent = datos.pax; $('paxEsp').textContent = datos.pax_esp;
+    $('tiempo').textContent = dur(datos.carrera_s); $('hoy').textContent = datos.carreras_hoy;
+    $('aprobar').textContent = datos.aprobado ? 'Bloquear cámara' : 'Aprobar cámara';
+    $('info').innerHTML = `ID ${datos.id} · firmware ${esc(datos.fw || '–')}<br>` +
+      `${datos.en_linea ? 'En línea' : 'Visto ' + hace(datos.visto)} · WiFi ${datos.rssi ?? '–'} dBm · ${datos.temp ?? '–'} °C · ${datos.fotos_recibidas} fotos recibidas`;
+    $('pie').textContent = datos.ultima ? `Última foto: ${new Date(datos.ultima.ts * 1000).toLocaleString()} · verde = cuenta, gris = fuera de la jaula` : 'Aún no hay fotos';
+    if (datos.ultima_foto && datos.ultima_foto !== fotoActual) { fotoActual = datos.ultima_foto; img.src = '/fotos/' + fotoActual; }
+    else dibujar();
+    $('carreras').innerHTML = filaCarreraTitulo(false) + datos.carreras.map(c => filaCarrera(c, false)).join('');
+  } catch (e) { $('pie').textContent = 'Sin conexión con el servidor'; }
+}
+cargar(); setInterval(() => { if (!editando) cargar(); }, 1500);
+</script>
+</body>
+</html>

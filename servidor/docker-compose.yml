@@ -1,0 +1,29 @@
+# Despliegue en un servidor Linux (VPS) con HTTPS automático.
+#   1. cp .env.example .env   (y completar)
+#   2. ./preparar_docker.sh   (copia el modelo junto al Dockerfile)
+#   3. docker compose up -d --build
+services:
+  taxiff:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./datos:/datos          # base de datos, fotos y firmware: hacer copia de seguridad
+    expose:
+      - "8000"
+
+  caddy:                        # certificado HTTPS gratis (Let's Encrypt) para DOMINIO
+    image: caddy:2
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_datos:/data
+    depends_on:
+      - taxiff
+
+volumes:
+  caddy_datos:

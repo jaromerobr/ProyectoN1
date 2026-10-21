@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Taxiff · Panel</title>
+<link rel="stylesheet" href="/web/estilo.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<header><h1>Taxiff</h1><span class="m" id="resumen"></span></header>
+<main>
+  <section>
+    <h2>Taxis</h2>
+    <div id="taxis" class="grid"></div>
+    <p class="m" id="vacio" hidden>Todavía no se conectó ninguna cámara. Cuando un ESP32 envíe su primera foto aparecerá aquí.</p>
+  </section>
+  <section>
+    <div class="fila"><h2>Últimas carreras</h2><a class="m" id="csv" href="/api/panel/carreras.csv">Descargar todas para Excel (CSV)</a></div>
+    <div class="card"><table id="carreras"></table></div>
+  </section>
+  <section>
+    <h2>Firmware de las cámaras</h2>
+    <div class="card">
+      <p class="m" id="fwinfo"></p>
+      <div class="fila botones">
+        <input id="fwver" placeholder="Versión (ej. 1.9)" style="max-width:180px;margin:0">
+        <input id="fwbin" type="file" accept=".bin" style="max-width:320px;margin:0">
+        <button id="fwsubir">Subir firmware</button>
+      </div>
+      <p class="m">El archivo es el <b>taxiff_cam.ino.bin</b> que genera la compilación. Las cámaras lo instalan solas en menos de un minuto si su versión es más vieja.</p>
+    </div>
+  </section>
+</main>
+<script src="/web/comun.js"></script>
+<script>
+async function cargar() {
+  try {
+    const [taxis, carreras] = await Promise.all([api('/api/panel/taxis'), api('/api/panel/carreras?limite=30')]);
+    $('vacio').hidden = taxis.length > 0;
+    const enLinea = taxis.filter(t => t.en_linea).length;
+    const enCarrera = taxis.filter(t => t.estado === 'EN_CARRERA').length;
+    $('resumen').textContent = `${taxis.length} cámaras · ${enLinea} en línea · ${enCarrera} en carrera`;
+    $('taxis').innerHTML = taxis.map(t => `
+      <a class="card taxi" href="/taxi/${t.id}">
+        <img src="${t.ultima_foto ? '/fotos/' + t.ultima_foto : ''}" alt="">
+        <div class="fila"><b>${esc(t.nombre || t.id)}</b>${pill(t)}</div>
+        <div class="m">${t.id}${t.aprobado ? '' : ' · <span class="mal">pendiente de aprobar</span>'}</div>
+        <div class="k">
+          <div><b>${t.pax}</b><span>pasajeros</span></div>
+          <div><b>${t.carreras_hoy}</b><span>carreras hoy</span></div>
+          <div><b>${t.temp ?? '–'}°</b><span>temp.</span></div>
+        </div>
+        <div class="m">${t.en_linea ? 'En línea' : 'Visto ' + hace(t.visto)}${t.rssi ? ' · WiFi ' + t.rssi + ' dBm' : ''}</div>
+      </a>`).join('');
+    $('carreras').innerHTML = filaCarreraTitulo(true) + carreras.map(c => filaCarrera(c, true)).join('');
+    const salud = await api('/api/salud');
+    const versiones = [...new Set(taxis.map(t => t.fw).filter(Boolean))].join(', ') || '–';
+    $('fwinfo').textContent = `Firmware publicado: ${salud.firmware || 'ninguno'} · versiones en las cámaras: ${versiones}`;
+  } catch (e) { $('resumen').textContent = 'Sin conexión con el servidor'; }
+  setTimeout(cargar, 3000);
+}
+$('fwsubir').onclick = async () => {
+  const v = $('fwver').value.trim(), f = $('fwbin').files[0];
+  if (!v || !f) { alert('Escribe la versión y elige el archivo .bin'); return; }
+  const r = await fetch('/api/panel/firmware?version=' + encodeURIComponent(v), { method: 'POST', body: f });
+  alert(r.ok ? 'Firmware ' + v + ' publicado.' : 'Error: ' + (await r.json()).detail);
+};
+cargar();
+</script>
+</body>
+</html>

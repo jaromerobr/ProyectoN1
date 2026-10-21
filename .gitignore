@@ -1,0 +1,63 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# --- Taxiff: lo que NO va al repositorio ---
+# Datos (datasets, fotos, videos, pruebas) y archivos viejos de la cámara
+/esp32/datos/
+/esp32/pruebas/
+/esp32/archivo/
+build_esp32/
+# Servidor: entorno de Python, datos de producción, claves, binarios descargados
+/servidor/.venv/
+/servidor/datos/
+/servidor/.env
+/servidor/herramientas/
+/servidor/modelos/
+.pytest_cache/
+__pycache__/
+# Notas personales
+/RESUMEN_PARA_IAS.md
+*.mp4
