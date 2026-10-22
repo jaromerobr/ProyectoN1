@@ -6,7 +6,12 @@ Placa ESP32-S3 con cámara OV3660, 16 MB de flash y 8 MB de PSRAM (tipo ESP32-S3
 
 - **Detecta cabezas** con un modelo FOMO propio (Edge Impulse, 160×160 en gris): unos 420 ms por foto, unas 2 fotos por segundo. También puede usar el detector de caras de Espressif.
 - **Lleva su propia lógica de carrera** (LIBRE → CONFIRMANDO → EN CARRERA) para mostrarla en su página. La que vale es la del servidor.
-- **Envía fotos al servidor:** una cada 5 s con la cabina vacía y una por segundo con pasajeros (el ritmo lo indica el servidor). Sin internet, las guarda en su memoria (9 MB) y las sube después, las más viejas primero.
+- **Envía fotos al servidor:** una cada 5 s con la cabina vacía y una por segundo con pasajeros (el ritmo lo indica el servidor). Sin internet, las guarda y las sube después, las más viejas primero. La cola sobrevive a reinicios y cortes de luz.
+- **Tarjeta microSD (opcional, recomendada):** si hay una, la cola y las fotos de entrenamiento van ahí.
+  - Una de 32 GB guarda millones de fotos, o sea, semanas sin internet.
+  - Sin tarjeta usa la memoria interna (9 MB, unas 800 fotos).
+  - Recomendada: microSD **High Endurance de 32 GB**, en FAT32, que es como viene de fábrica.
+  - La página de la cámara muestra qué almacenamiento usa y cuánto espacio queda.
 - **Se actualiza sola por internet** cuando se publica un firmware nuevo en el servidor. Si una versión falla 3 veces, no la vuelve a intentar.
 - **Página propia** en `http://<ip-de-la-cámara>` o `http://taxiff-cam.local`:
   - imagen en vivo;

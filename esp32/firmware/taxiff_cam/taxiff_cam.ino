@@ -14,6 +14,8 @@
 #include <ESPmDNS.h>
 #include <Preferences.h>
 #include <FFat.h>
+#include <SD_MMC.h>
+#include "ff.h"
 #include <HTTPClient.h>
 #include <Update.h>
 #include <WiFiClientSecure.h>
@@ -104,23 +106,60 @@ uint32_t camFailSince = 0, camReinits = 0, camReinitsInRow = 0;
 // Cámara montada al revés: el sensor gira la imagen 180° sin costo.
 bool rot180 = false;
 
-// Fotos para entrenar: se guardan en la memoria interna (FFat, 9 MB) cada
-// `capEvery` segundos o al pulsar "Guardar foto", y la PC las descarga.
-bool fatOk = false, capNow = false;
+// Almacenamiento: la tarjeta microSD si hay una (pines de la placa tipo
+// Freenove ESP32-S3 CAM, modo 1 bit); si no, la memoria interna (FFat, 9 MB).
+// Ahí van la cola de envío sin internet (/q) y las fotos para entrenar (/fotos).
+const int SD_CLK = 39, SD_CMD = 38, SD_D0 = 40;
+bool fatOk = false, sdOk = false;
+fs::FS *store = &FFat;
+volatile uint32_t freeKB = 0;  // espacio libre (se recalcula cada 10 s: en la SD es lento)
+
+bool storeOk() { return sdOk || fatOk; }
+
+// Espacio libre de la SD. SD_MMC.totalBytes()/usedBytes() de este core miran
+// siempre la unidad "0:", que es la memoria interna (se monta antes), así que
+// se busca a mano la unidad grande (la tarjeta).
+uint64_t sdFreeBytes() {
+  for (char d = '0'; d <= '3'; d++) {
+    char drv[3] = {d, ':', 0};
+    FATFS *fs;
+    DWORD freeClusters;
+    if (f_getfree(drv, &freeClusters, &fs) != FR_OK) continue;
+    uint64_t total = (uint64_t)(fs->n_fatent - 2) * fs->csize * 512;
+    if (total > 1000000000ULL) return (uint64_t)freeClusters * fs->csize * 512;
+  }
+  return 0;
+}
+
+uint32_t measureFreeKB() {
+  if (sdOk) return (uint32_t)(sdFreeBytes() / 1024);
+  return fatOk ? FFat.freeBytes() / 1024 : 0;
+}
+
+// Fotos para entrenar: se guardan cada `capEvery` segundos o al pulsar
+// "Guardar foto", y la PC las descarga.
+bool capNow = false;
 int capEvery = 0;
 uint32_t capCount = 0, lastCap = 0;
-const size_t CAP_MIN_FREE = 300 * 1024;
+uint32_t capMinFreeKB() { return sdOk ? 100 * 1024 : 300; }
+void removeFilesIn(const char *dirPath);
 
 // Envío al servidor. Cada cámara se identifica con su ID de fábrica
 // (TX-XXXXXX, de la MAC) y el token que el servidor le da al registrarse.
-// Sin internet, las fotos se guardan en /q de la memoria interna y se suben
-// después, las más viejas primero.
-const char *FW_VERSION = "2.8";
+// Sin internet, las fotos se guardan en /q y se suben después, las más viejas
+// primero.
+const char *FW_VERSION = "2.9";
 char devId[12];
 String srvUrl, devToken;
 char srvState[64] = "sin servidor configurado";
-volatile uint32_t srvInterval = 5000, sentOk = 0, sentErr = 0, lastSentMs = 0, queueCount = 0;
-const size_t QUEUE_MIN_FREE = 600 * 1024;  // deja espacio a las fotos de entrenamiento
+volatile uint32_t srvInterval = 5000, sentOk = 0, sentErr = 0, lastSentMs = 0;
+// Cola numerada: las fotos [qHead, qTail) esperan envío. Cada una va en
+// /q/<seq/4096>/<seq%4096>.JPG (nombres cortos 8.3 y carpetas de 4096 para
+// que FAT32 no se llene ni se vuelva lenta con miles de fotos). Así la más
+// vieja se encuentra sin recorrer la carpeta.
+volatile uint32_t qHead = 0, qTail = 0;
+uint32_t queueSize() { return qTail - qHead; }
+uint32_t queueMinFreeKB() { return sdOk ? 200 * 1024 : 600; }  // deja espacio a las fotos de entrenamiento
 void setServer(String url);
 
 // Actualización por internet: el servidor guarda el firmware más nuevo y la
@@ -312,7 +351,8 @@ const bar=(v,c)=>`<div style="height:8px;background:#2a2a2e;border-radius:4px;ma
 $('devid').textContent=d.id;if(document.activeElement!==$('srv'))$('srv').value=d.srv;
 $('srvinfo').textContent=d.srv?`${d.srv_estado} · ${d.enviadas} fotos enviadas${d.ult_envio_s>=0?' (última hace '+d.ult_envio_s+' s)':''} · ${d.en_cola} en cola sin internet · ritmo ${d.intervalo_ms/1000} s`:'No envía a ningún servidor.';
 $('mname').textContent=d.cfg.model=='caras'?'caras (Espressif)':d.modelo;
-$('capinfo').textContent=`${d.fotos} fotos guardadas · espacio libre ${(d.fotos_libre_kb/1024).toFixed(1)} MB (≈ ${Math.floor(d.fotos_libre_kb/12)} fotos más)`;
+const mb=d.fotos_libre_kb/1024,libre=mb>=1024?(mb/1024).toFixed(1)+' GB':mb.toFixed(1)+' MB';
+$('capinfo').textContent=(d.almacen=='sd'?`Tarjeta SD de ${d.sd_gb} GB`:d.almacen=='interna'?'Sin tarjeta SD: memoria interna':'Sin memoria')+` · ${d.fotos} fotos guardadas · libre ${libre} (≈ ${Math.floor(d.fotos_libre_kb/12).toLocaleString()} fotos más)`;
 $('met').innerHTML=(d.cam_ok?'':'<b style="color:#f2453d">LA CÁMARA NO ENVÍA IMAGEN: reiniciándola…</b><br>')+(d.cam_reinits?`Reinicios de cámara: ${d.cam_reinits}<br>`:'')+`Temperatura del chip: <b style="color:${tc};font-size:20px">${d.temp} °C</b> (máx. ${d.tmax} °C)${d.hot?' · <b style="color:#f2453d">MUY CALIENTE: va más lento para enfriarse</b>':''}${bar(d.temp,tc)}`+
 `CPU ocupada: <b>${d.busy}%</b>${bar(d.busy,d.busy>85?'#ff9f0a':'#30c26b')}`+
 `Por foto: cámara ${d.cam_ms} ms · detección ${d.det_ms} ms · JPEG ${d.jpg_ms} ms<br>Enviando a la PC: ${d.kbs} KB/s (≈ ${Math.round(d.kbs*3.6)} MB/hora) · ${d.fps} fps`;}catch(e){}setTimeout(info,2000)}
@@ -414,10 +454,12 @@ esp_err_t handleStatus(httpd_req_t *req) {
              ",\"fotos\":" + String(capCount) +
              ",\"id\":\"" + devId + "\",\"srv\":\"" + srvUrl + "\",\"srv_estado\":\"" + srvState +
              "\",\"enviadas\":" + String(sentOk) + ",\"errores\":" + String(sentErr) +
-             ",\"en_cola\":" + String(queueCount) +
+             ",\"en_cola\":" + String(queueSize()) +
              ",\"ult_envio_s\":" + String(lastSentMs ? (millis() - lastSentMs) / 1000 : -1) +
              ",\"intervalo_ms\":" + String(srvInterval) +
-             ",\"fotos_libre_kb\":" + String(fatOk ? (unsigned)(FFat.freeBytes() / 1024) : 0) +
+             ",\"fotos_libre_kb\":" + String(freeKB) +
+             ",\"almacen\":\"" + (sdOk ? "sd" : fatOk ? "interna" : "ninguno") + "\"" +
+             ",\"sd_gb\":" + String(sdOk ? SD_MMC.cardSize() / 1073741824.0 : 0, 1) +
              ",\"net\":\"" + (apMode ? String("Red propia ") + AP_SSID : "WiFi " + WiFi.SSID() + " · " + WiFi.localIP().toString()) +
              "\",\"trips\":[";
   for (int i = 0; i < tripCount; i++) {
@@ -550,13 +592,13 @@ esp_err_t handleSet(httpd_req_t *req) {
 
 // /fotos: lista de fotos guardadas para entrenar, en JSON.
 esp_err_t handlePhotos(httpd_req_t *req) {
-  String j = "{\"ok\":" + String(fatOk ? 1 : 0) + ",\"free_kb\":" +
-             String(fatOk ? (unsigned)(FFat.freeBytes() / 1024) : 0) + ",\"files\":[";
+  String j = "{\"ok\":" + String(storeOk() ? 1 : 0) + ",\"free_kb\":" + String(freeKB) + ",\"files\":[";
   int n = 0;
-  if (fatOk) {
-    File dir = FFat.open("/");
-    for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+  if (storeOk()) {
+    File dir = store->open("/fotos");
+    for (File f = dir ? dir.openNextFile() : File(); f; f = dir.openNextFile()) {
       String name = f.name();
+      name = name.substring(name.lastIndexOf('/') + 1);
       if (name.endsWith(".jpg")) j += String(n++ ? "," : "") + "\"" + name + "\"";
     }
   }
@@ -568,19 +610,26 @@ esp_err_t handlePhotos(httpd_req_t *req) {
 // /foto?f=t00001.jpg descarga una; /foto?borrar=todas las borra.
 esp_err_t handlePhoto(httpd_req_t *req) {
   char q[64] = {0}, v[40];
-  if (!fatOk || httpd_req_get_url_query_str(req, q, sizeof q) != ESP_OK) return httpd_resp_send_404(req);
+  if (!storeOk() || httpd_req_get_url_query_str(req, q, sizeof q) != ESP_OK) return httpd_resp_send_404(req);
   if (httpd_query_key_value(q, "borrar", v, sizeof v) == ESP_OK) {
-    // Formatear en vez de borrar archivo por archivo: también recupera el
-    // espacio perdido si la placa se reinició a mitad de una escritura.
     int every = capEvery;
     capEvery = 0;
-    fatOk = false;
     delay(300);  // deja terminar una captura en curso
-    FFat.end();
-    FFat.format();
-    fatOk = FFat.begin(true);
-    if (fatOk) FFat.mkdir("/q");  // también vacía la cola de envío
-    queueCount = 0;
+    if (sdOk) {
+      // En la SD se borran solo las fotos de entrenamiento (la cola no).
+      removeFilesIn("/fotos");
+    } else {
+      // En la memoria interna se formatea: también recupera el espacio
+      // perdido si la placa se reinició a mitad de una escritura.
+      fatOk = false;
+      FFat.end();
+      FFat.format();
+      fatOk = FFat.begin(true);
+      qHead = qTail = 0;  // vacía también la cola de envío
+    }
+    store->mkdir("/fotos");
+    store->mkdir("/q");
+    freeKB = measureFreeKB();
     capEvery = every;
     capCount = 0;
     prefs.putUInt("capn", 0);
@@ -588,7 +637,7 @@ esp_err_t handlePhoto(httpd_req_t *req) {
     return httpd_resp_sendstr(req, "{\"borradas\":1}");
   }
   if (httpd_query_key_value(q, "f", v, sizeof v) != ESP_OK || strchr(v, '/')) return httpd_resp_send_404(req);
-  File f = FFat.open(String("/") + v, "r");
+  File f = store->open(String("/fotos/") + v, "r");
   if (!f) return httpd_resp_send_404(req);
   httpd_resp_set_type(req, "image/jpeg");
   static uint8_t buf[4096];
@@ -600,7 +649,7 @@ esp_err_t handlePhoto(httpd_req_t *req) {
 
 // Guarda la foto actual en buena calidad (para entrenar, no para la página).
 void capturePhoto(camera_fb_t *fb) {
-  if (!fatOk || FFat.freeBytes() < CAP_MIN_FREE) {
+  if (!storeOk() || freeKB < capMinFreeKB()) {
     capEvery = 0;
     Serial.println("# memoria de fotos llena: captura detenida");
     return;
@@ -608,15 +657,29 @@ void capturePhoto(camera_fb_t *fb) {
   uint8_t *jpg = nullptr;
   size_t len = 0;
   if (!frame2jpg(fb, 90, &jpg, &len)) return;
-  char name[20];
-  snprintf(name, sizeof name, "/t%05u.jpg", (unsigned)++capCount);
-  File f = FFat.open(name, "w");
+  char name[24];
+  snprintf(name, sizeof name, "/fotos/t%05u.jpg", (unsigned)++capCount);
+  File f = store->open(name, "w");
   if (f) {
     f.write(jpg, len);
     f.close();
     prefs.putUInt("capn", capCount);
+    freeKB -= min<uint32_t>((uint32_t)freeKB, (uint32_t)(len / 1024 + 1));
   }
   free(jpg);
+}
+
+// Borra los archivos de una carpeta (no las subcarpetas).
+void removeFilesIn(const char *dirPath) {
+  std::vector<String> names;
+  File dir = store->open(dirPath);
+  for (File f = dir ? dir.openNextFile() : File(); f; f = dir.openNextFile()) {
+    if (f.isDirectory()) continue;
+    String name = f.name();
+    names.push_back(String(dirPath) + "/" + name.substring(name.lastIndexOf('/') + 1));
+  }
+  if (dir) dir.close();
+  for (auto &n : names) store->remove(n);
 }
 
 // ---- Envío al servidor -------------------------------------------------------
@@ -708,58 +771,117 @@ bool postPhoto(const uint8_t *buf, size_t len, uint32_t ts, int n) {
   return false;
 }
 
-void enqueuePhoto(const uint8_t *buf, size_t len, uint32_t ts, int n) {
-  if (!fatOk) return;
-  // Memoria casi llena: se borra la foto más vieja de la cola.
-  while (FFat.freeBytes() < QUEUE_MIN_FREE && queueCount > 0) {
-    String oldest;
-    File dir = FFat.open("/q");
-    for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
-      String name = f.name();
-      if (!oldest.length() || name < oldest) oldest = name;
-    }
-    dir.close();
-    if (!oldest.length() || !FFat.remove("/q/" + oldest)) break;
-    queueCount--;
-  }
-  char name[40];
-  snprintf(name, sizeof name, "/q/%010u_%u_%d.jpg", (unsigned)ts, (unsigned)(millis() % 1000), n);
-  File f = FFat.open(name, "w");
-  if (!f) return;
-  f.write(buf, len);
-  f.close();
-  queueCount++;
+String qDir(uint32_t seq) {
+  char b[12];
+  snprintf(b, sizeof b, "/q/%03X", (unsigned)(seq >> 12));
+  return b;
 }
 
-// Sube la foto más vieja de la cola. false si no se pudo.
+String qPath(uint32_t seq) {
+  char b[20];
+  snprintf(b, sizeof b, "/q/%03X/%03X.JPG", (unsigned)(seq >> 12), (unsigned)(seq & 0xFFF));
+  return b;
+}
+
+// La foto más vieja ya se envió (o se descartó): se avanza y, al terminar una
+// carpeta de 4096, se borra.
+void queueDropHead() {
+  store->remove(qPath(qHead));
+  qHead++;
+  if ((qHead & 0xFFF) == 0 || qHead == qTail) store->rmdir(qDir(qHead - 1));
+}
+
+// Guarda una foto en la cola. Cada archivo lleva delante 8 bytes con la hora
+// de la foto y lo que contó la cámara.
+void enqueuePhoto(const uint8_t *buf, size_t len, uint32_t ts, int n) {
+  if (!storeOk()) return;
+  // Memoria casi llena: se descartan las fotos más viejas de la cola.
+  while (freeKB < queueMinFreeKB() && qHead < qTail) {
+    queueDropHead();
+    freeKB += len / 1024 + 1;
+  }
+  String path = qPath(qTail);
+  File f = store->open(path, "w");
+  if (!f) {
+    store->mkdir(qDir(qTail));
+    f = store->open(path, "w");
+  }
+  if (!f) return;
+  uint32_t hdr[2] = {ts, (uint32_t)n};
+  f.write((const uint8_t *)hdr, sizeof hdr);
+  f.write(buf, len);
+  f.close();
+  qTail++;
+  freeKB -= min<uint32_t>((uint32_t)freeKB, (uint32_t)(len / 1024 + 1));
+}
+
+// Sube la foto más vieja de la cola. false si no se pudo (sin internet).
 bool sendOldestQueued() {
-  String oldest;
-  File dir = FFat.open("/q");
-  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
-    String name = f.name();
-    if (!oldest.length() || name < oldest) oldest = name;
+  while (qHead < qTail) {
+    File f = store->open(qPath(qHead), "r");
+    size_t total = f ? f.size() : 0;
+    if (total <= 8) {  // falta o quedó a medias (corte de luz): se salta
+      if (f) f.close();
+      queueDropHead();
+      continue;
+    }
+    uint32_t hdr[2];
+    f.read((uint8_t *)hdr, sizeof hdr);
+    size_t len = total - sizeof hdr;
+    uint8_t *buf = (uint8_t *)ps_malloc(len);
+    if (!buf) {
+      f.close();
+      return false;
+    }
+    f.read(buf, len);
+    f.close();
+    bool ok = postPhoto(buf, len, hdr[0], (int)hdr[1]);
+    free(buf);
+    if (ok) queueDropHead();
+    return ok;
   }
-  dir.close();
-  if (!oldest.length()) {
-    queueCount = 0;
-    return true;
+  return true;
+}
+
+// Al arrancar: busca dónde empieza y termina la cola que quedó guardada.
+void queueInit() {
+  store->mkdir("/q");
+  int minD = 0x1000, maxD = -1;
+  std::vector<String> old;
+  File root = store->open("/q");
+  for (File e = root ? root.openNextFile() : File(); e; e = root.openNextFile()) {
+    String name = e.name();
+    name = name.substring(name.lastIndexOf('/') + 1);
+    if (e.isDirectory()) {
+      int d = strtol(name.c_str(), nullptr, 16);
+      minD = min(minD, d);
+      maxD = max(maxD, d);
+    } else {
+      old.push_back("/q/" + name);  // formato de versiones anteriores: se descarta
+    }
   }
-  String path = "/q/" + oldest;
-  File f = FFat.open(path, "r");
-  size_t len = f ? f.size() : 0;
-  uint8_t *buf = len ? (uint8_t *)ps_malloc(len) : nullptr;
-  if (buf) f.read(buf, len);
-  if (f) f.close();
-  // Nombre: <hora>_<ms>_<conteo>.jpg
-  uint32_t ts = oldest.substring(0, 10).toInt();
-  int n = oldest.substring(oldest.lastIndexOf('_') + 1).toInt();
-  bool ok = buf && postPhoto(buf, len, ts, n);
-  free(buf);
-  if (ok || !buf) {
-    FFat.remove(path);
-    if (queueCount) queueCount--;
+  if (root) root.close();
+  for (auto &o : old) store->remove(o);
+  if (maxD < 0) {
+    qHead = qTail = 0;
+    return;
   }
-  return ok;
+  // Primera foto de la carpeta más vieja y última de la más nueva.
+  auto scan = [](int d, bool first) -> int {
+    int best = first ? 0x1000 : -1;
+    File dir = store->open(qDir((uint32_t)d << 12));
+    for (File f = dir ? dir.openNextFile() : File(); f; f = dir.openNextFile()) {
+      String name = f.name();
+      int i = strtol(name.substring(name.lastIndexOf('/') + 1).c_str(), nullptr, 16);
+      best = first ? min(best, i) : max(best, i);
+    }
+    if (dir) dir.close();
+    return best;
+  };
+  int h = scan(minD, true), t = scan(maxD, false);
+  qHead = ((uint32_t)minD << 12) + (h < 0x1000 ? h : 0);
+  qTail = ((uint32_t)maxD << 12) + (t >= 0 ? t + 1 : 0);
+  if (qTail < qHead) qTail = qHead;
 }
 
 // Descarga el firmware y lo escribe en la otra partición; si todo llega bien,
@@ -905,7 +1027,7 @@ void uploadTask(void *) {
       continue;
     }
     // Entre fotos en vivo se va vaciando la cola.
-    if (online && devToken.length() && queueCount > 0 && !sendOldestQueued()) {
+    if (online && devToken.length() && queueSize() > 0 && !sendOldestQueued()) {
       vTaskDelay(pdMS_TO_TICKS(3000));
     }
   }
@@ -917,14 +1039,9 @@ void startUploader() {
   srvUrl = prefs.getString("srv", "");
   devToken = prefs.getString("tok", "");
   if (srvUrl.length()) snprintf(srvState, sizeof srvState, "conectando…");
-  if (fatOk) {
-    FFat.mkdir("/q");
-    File dir = FFat.open("/q");
-    for (File f = dir.openNextFile(); f; f = dir.openNextFile()) queueCount++;
-    dir.close();
-  }
+  if (storeOk()) queueInit();
   Serial.printf("# camara %s · servidor: %s · %u fotos en cola\n", devId,
-                srvUrl.length() ? srvUrl.c_str() : "(ninguno)", (unsigned)queueCount);
+                srvUrl.length() ? srvUrl.c_str() : "(ninguno)", (unsigned)queueSize());
   xTaskCreatePinnedToCore(uploadTask, "subida", 12288, nullptr, 1, nullptr, 0);
 }
 
@@ -1040,8 +1157,19 @@ void setup() {
   lock = xSemaphoreCreateMutex();
   // La primera vez formatea la partición de 9 MB (tarda unos segundos).
   fatOk = FFat.begin(true);
-  if (!fatOk) Serial.println("# ERROR: no se pudo abrir la memoria de fotos");
-  Serial.printf("# memoria de fotos: %u KB libres\n", fatOk ? (unsigned)(FFat.freeBytes() / 1024) : 0);
+  if (!fatOk) Serial.println("# ERROR: no se pudo abrir la memoria interna");
+  // Tarjeta microSD (si hay): modo 1 bit, sin formatear nunca sola.
+  SD_MMC.setPins(SD_CLK, SD_CMD, SD_D0);
+  sdOk = SD_MMC.begin("/sdcard", true, false) && SD_MMC.cardType() != CARD_NONE;
+  if (sdOk) {
+    store = &SD_MMC;
+    Serial.printf("# tarjeta SD: %.1f GB\n", SD_MMC.cardSize() / 1073741824.0);
+  } else {
+    Serial.println("# sin tarjeta SD: se usa la memoria interna (9 MB)");
+  }
+  if (storeOk()) store->mkdir("/fotos");
+  freeKB = measureFreeKB();
+  Serial.printf("# espacio libre para fotos: %u MB\n", (unsigned)(freeKB / 1024));
   loadConfig();
   // Cuando se pierde una foto (WiFi, escritura en memoria, 640x480) la tarea
   // de la cámara imprime "EV-EOF-OVF" y su pila es tan pequeña que imprimir la
@@ -1302,6 +1430,7 @@ void housekeeping(uint32_t now) {
   }
   if (now - lastInfo > 10000) {
     lastInfo = now;
+    if (storeOk()) freeKB = measureFreeKB();
     Serial.printf("# %s · %s · %.1f fps · %.1f C · CPU %d%% · RAM %u KB · %s\n",
                   apMode ? "AP 192.168.4.1" : WiFi.localIP().toString().c_str(),
                   camFailSince ? "SIN IMAGEN" : "camara ok", fps, temp,
