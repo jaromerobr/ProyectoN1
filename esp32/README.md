@@ -73,6 +73,8 @@ Otros comandos por cable: `SCAN` (redes visibles), `RESETLOG` (borra el historia
 
 | Script | Para qué |
 |---|---|
+| `camara.ps1 ip / wifi / servidor / redes / mensajes` | Configura y revisa la cámara por cable: WiFi, servidor, IP y mensajes. Ver [docs/GUIA_RAPIDA.md](../docs/GUIA_RAPIDA.md). |
+| `cargar_firmware.ps1 [-SoloCompilar]` | Compila el firmware y lo carga por cable, o genera el `.bin` para publicarlo en el panel. |
 | `descargar_fotos.ps1 <ip> [-Borrar]` | Baja las fotos de entrenamiento guardadas en la cámara a `datos/fotos_taxi/`. |
 | `fotos_de_video.ps1 -Video <mp4> -Out <carpeta>` | Saca fotos limpias de una grabación de la página de la cámara. Recorta la imagen y descarta las que tienen recuadros dibujados o se repiten. |
 | `dataset_v2.ps1` | Arma el dataset para Edge Impulse desde el export YOLOv8 de Roboflow. Agrega versiones con calidad tipo ESP32 y giradas 180°. |

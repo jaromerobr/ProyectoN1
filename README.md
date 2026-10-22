@@ -42,6 +42,8 @@ Cámara ESP32 (taxi) ──WiFi──► hotspot del taxista ──4G──► S
 
 ## Empezar
 
+**Paso a paso para levantar el servidor y conectar la cámara:** [docs/GUIA_RAPIDA.md](docs/GUIA_RAPIDA.md).
+
 - **App:** `flutter pub get` y `flutter run`. Ver [docs/app.md](docs/app.md).
 - **Servidor en la PC (pruebas):** `servidor\iniciar_pc.ps1`. Ver [servidor/README.md](servidor/README.md).
 - **Cámara:** compilar y cargar el firmware. Ver [esp32/README.md](esp32/README.md).
