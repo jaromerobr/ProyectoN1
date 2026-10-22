@@ -1,4 +1,4 @@
-# Starts the Taxiff server on this PC for testing.
+﻿# Starts the Taxiff server on this PC for testing.
 #   .\iniciar_pc.ps1                     server on http://<this PC IP>:8000 (same WiFi only)
 #   .\iniciar_pc.ps1 -Tunel              plus a public https address (Cloudflare quick tunnel),
 #                                        reachable from the taxi through the driver's mobile data
