@@ -152,8 +152,8 @@
 <script src="/web/comun.js"></script>
 <script>
 const id = location.pathname.split('/').pop();
-const hora = ts => new Date(ts * 1000).toLocaleTimeString();
-const horaCorta = ts => new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const hora = ts => new Date(ts * 1000).toLocaleTimeString('es-ES');
+const horaCorta = ts => new Date(ts * 1000).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
 let datos = null;
 
 // ---------------------------------------------------------------- pestañas
@@ -172,7 +172,7 @@ function abrirVisor(lista, i) { visorLista = lista; visorI = i; $('visor').hidde
 function mostrarFoto() {
   const f = visorLista[visorI];
   $('vImg').src = '/fotos/' + f.foto;
-  $('vInfo').innerHTML = `<b>${new Date(f.ts * 1000).toLocaleString()}</b>${f.aprox ? ' (hora aproximada)' : ''}` +
+  $('vInfo').innerHTML = `<b>${new Date(f.ts * 1000).toLocaleString('es-ES')}</b>${f.aprox ? ' (hora aproximada)' : ''}` +
     ` · <b>${f.n}</b> pasajero${f.n === 1 ? '' : 's'} · ${visorI + 1} de ${visorLista.length}` +
     ` · <a href="/fotos/${f.foto}" download>descargar</a>`;
 }
@@ -203,7 +203,7 @@ async function cargarDias() {
     $(sel).innerHTML = dias.map(d => `<option value="${d}">${fechaLarga(d)}</option>`).join('') || '<option value="">sin datos todavía</option>';
   }
 }
-const fechaLarga = d => new Date(d + 'T12:00').toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+const fechaLarga = d => new Date(d + 'T12:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
 // ---------------------------------------------------------------- carreras
 async function cargarCarreras() {
@@ -246,7 +246,7 @@ async function fotosEntre(desde, hasta) {
 }
 async function abrirDetalle(c) {
   $('detalle').hidden = false;
-  $('dTitulo').textContent = `${new Date(c.inicio * 1000).toLocaleDateString()} · ${hora(c.inicio)} → ${hora(c.fin)}`;
+  $('dTitulo').textContent = `${new Date(c.inicio * 1000).toLocaleDateString('es-ES')} · ${hora(c.inicio)} → ${hora(c.fin)}`;
   $('dDuracion').textContent = durLarga(c.duracion);
   $('dPax').textContent = c.pasajeros;
   $('dMax').textContent = c.max_pax;
@@ -557,7 +557,7 @@ async function cargar() {
       `<br>${datos.fotos_recibidas} fotos recibidas${datos.cola ? ` · ${datos.cola} fotos esperando en la cámara` : ''}` +
       (datos.ip_local ? `<br>IP en su red: <b>${esc(datos.ip_local)}</b> · <a href="http://${esc(datos.ip_local)}" target="_blank">abrir su página</a> (solo desde la misma WiFi)` : '');
     pintarAjustes();
-    $('pie').textContent = datos.ultima ? `Última foto: ${new Date(datos.ultima.ts * 1000).toLocaleString()} · verde = cuenta, gris = fuera de la jaula` : 'Aún no hay fotos';
+    $('pie').textContent = datos.ultima ? `Última foto: ${new Date(datos.ultima.ts * 1000).toLocaleString('es-ES')} · verde = cuenta, gris = fuera de la jaula` : 'Aún no hay fotos';
     if (datos.ultima_foto && datos.ultima_foto !== fotoActual) { fotoActual = datos.ultima_foto; img.src = '/fotos/' + fotoActual; }
     else if (pestana === 'vivo') dibujar();
   } catch (e) { $('pie').textContent = 'Sin conexión con el servidor'; }

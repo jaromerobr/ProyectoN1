@@ -11,7 +11,7 @@ const durLarga = s => {
   return Math.floor(s / 3600) + ' h ' + String(Math.floor(s / 60) % 60).padStart(2, '0') + ' min';
 };
 const hace = ts => { if (!ts) return 'nunca'; const s = Date.now() / 1000 - ts;
-  return s < 60 ? 'hace ' + Math.round(s) + ' s' : s < 3600 ? 'hace ' + Math.round(s / 60) + ' min' : new Date(ts * 1000).toLocaleString(); };
+  return s < 60 ? 'hace ' + Math.round(s) + ' s' : s < 3600 ? 'hace ' + Math.round(s / 60) + ' min' : new Date(ts * 1000).toLocaleString('es-ES'); };
 const ESTADOS = { LIBRE: ['LIBRE', ''], CONFIRMANDO: ['CONFIRMANDO', 'amarillo'], EN_CARRERA: ['EN CARRERA', 'verde'] };
 
 function pill(t) {
@@ -33,7 +33,7 @@ function filaCarreraTitulo(conTaxi) {
 // Línea de tiempo de una carrera: "14:05:10 suben 2 · 14:20:31 baja 1 · …".
 function lineaDeTiempo(eventos) {
   return (eventos || []).map(([ts, tipo, k]) =>
-    `${new Date(ts * 1000).toLocaleTimeString()} ${tipo === 'sube' ? (k > 1 ? 'suben ' : 'sube ') : (k > 1 ? 'bajan ' : 'baja ')}${k}`).join(' · ');
+    `${new Date(ts * 1000).toLocaleTimeString('es-ES')} ${tipo === 'sube' ? (k > 1 ? 'suben ' : 'sube ') : (k > 1 ? 'bajan ' : 'baja ')}${k}`).join(' · ');
 }
 
 function filaCarrera(c, conTaxi) {
@@ -41,7 +41,7 @@ function filaCarrera(c, conTaxi) {
   const distintos = c.pasajeros ?? c.max_pax;
   const pax = `<b>${distintos}</b>${distintos !== c.max_pax ? ` <span class="m">(máx. ${c.max_pax} a la vez)</span>` : ''}`;
   const linea = lineaDeTiempo(c.eventos);
-  return `<tr class="${c.valida ? '' : 'descartada'}"><td>${new Date(c.inicio * 1000).toLocaleString()}` +
+  return `<tr class="${c.valida ? '' : 'descartada'}"><td>${new Date(c.inicio * 1000).toLocaleString('es-ES')}` +
     (linea ? `<div class="m">${linea}</div>` : '') + `</td>` +
     (conTaxi ? `<td><a href="/taxi/${c.dispositivo}">${esc(c.nombre || c.dispositivo)}</a></td>` : '') +
     `<td>${dur(c.duracion)}${c.valida ? '' : ' <span class="m">(descartada: menos de 30 s)</span>'}</td><td>${pax}</td><td>${fotos}</td></tr>`;
