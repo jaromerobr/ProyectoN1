@@ -466,8 +466,10 @@ def dias_con_fotos(disp: str):
 
 
 @app.get("/api/panel/taxi/{disp}/fotos", dependencies=[Depends(panel_auth)])
-def fotos_del_dia(disp: str, dia: str, solo_pasajeros: bool = False, limite: int = 400, desde: float = 0):
-    """Fotos de un día en orden de hora, con lo que contó el servidor y la cámara."""
+def fotos_del_dia(disp: str, dia: str, solo_pasajeros: bool = False, limite: int = 400,
+                  desde: float = 0, hasta: float = 0):
+    """Fotos de un día en orden de hora, con lo que contó el servidor y la cámara.
+    `desde`/`hasta` (hora en segundos) limitan a un rango, p. ej. una carrera."""
     try:
         datetime.strptime(dia, "%Y-%m-%d")
     except ValueError:
@@ -479,6 +481,8 @@ def fotos_del_dia(disp: str, dia: str, solo_pasajeros: bool = False, limite: int
     for j in sorted(carpeta.glob("*.json"), key=lambda f: float(f.stem)):
         if float(j.stem) < desde:
             continue
+        if hasta and float(j.stem) > hasta:
+            break
         try:
             info = json.loads(j.read_text())
         except (OSError, ValueError):
@@ -492,6 +496,29 @@ def fotos_del_dia(disp: str, dia: str, solo_pasajeros: bool = False, limite: int
         if len(out) >= min(limite, 2000):
             break
     return out
+
+
+@app.get("/api/panel/taxi/{disp}/carreras", dependencies=[Depends(panel_auth)])
+def carreras_del_dia(disp: str, dia: str):
+    """Carreras que empezaron ese día (hora local), de la primera a la última,
+    con un resumen del día."""
+    try:
+        ini = datetime.strptime(dia, "%Y-%m-%d").timestamp()
+    except ValueError:
+        raise HTTPException(400, "Día inválido (AAAA-MM-DD)")
+    rows = db("SELECT * FROM carreras WHERE dispositivo = ? AND inicio >= ? AND inicio < ? ORDER BY inicio",
+              (disp, ini, ini + 86400))
+    for c in rows:
+        c["fotos"] = json.loads(c["fotos"] or "[]")
+        c["eventos"] = json.loads(c.get("eventos") or "[]")
+        c["pasajeros"] = c.get("pasajeros") or c["max_pax"]
+    validas = [c for c in rows if c["valida"]]
+    return {"carreras": rows, "resumen": {
+        "carreras": len(validas),
+        "descartadas": len(rows) - len(validas),
+        "tiempo_s": sum(c["duracion"] for c in validas),
+        "pasajeros": sum(c["pasajeros"] for c in validas),
+        "mas_larga_s": max((c["duracion"] for c in validas), default=0)}}
 
 
 @app.post("/api/panel/taxi/{disp}", dependencies=[Depends(panel_auth)])

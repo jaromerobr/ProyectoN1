@@ -3,6 +3,13 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const dur = s => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60;
   return (h ? h + ':' + String(m).padStart(2, '0') : String(m).padStart(2, '0')) + ':' + String(x).padStart(2, '0'); };
+// "45 s", "6 min 14 s", "1 h 05 min".
+const durLarga = s => {
+  s = Math.max(0, Math.round(s || 0));
+  if (s < 60) return s + ' s';
+  if (s < 3600) return Math.floor(s / 60) + ' min ' + (s % 60) + ' s';
+  return Math.floor(s / 3600) + ' h ' + String(Math.floor(s / 60) % 60).padStart(2, '0') + ' min';
+};
 const hace = ts => { if (!ts) return 'nunca'; const s = Date.now() / 1000 - ts;
   return s < 60 ? 'hace ' + Math.round(s) + ' s' : s < 3600 ? 'hace ' + Math.round(s / 60) + ' min' : new Date(ts * 1000).toLocaleString(); };
 const ESTADOS = { LIBRE: ['LIBRE', ''], CONFIRMANDO: ['CONFIRMANDO', 'amarillo'], EN_CARRERA: ['EN CARRERA', 'verde'] };

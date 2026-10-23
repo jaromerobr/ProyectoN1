@@ -9,8 +9,40 @@
 </head>
 <body>
 <header><a href="/" class="m">‹ Todos los taxis</a><h1 id="titulo">Taxi</h1><span id="pill"></span></header>
-<main class="dos">
-  <section>
+
+<nav class="pestanas">
+  <button data-tab="carreras" class="activa">Carreras</button>
+  <button data-tab="fotos">Fotos</button>
+  <button data-tab="vivo">En vivo</button>
+  <button data-tab="ajustes">Ajustes</button>
+</nav>
+
+<main>
+  <!-- ======================= CARRERAS ======================= -->
+  <section id="tab-carreras" class="tab">
+    <div class="fila barra"><select id="diaCarreras"></select><span class="m" id="avisoCarreras"></span></div>
+    <div class="card k resumen">
+      <div><b id="rCarreras">0</b><span>carreras</span></div>
+      <div><b id="rPasajeros">0</b><span>pasajeros</span></div>
+      <div><b id="rTiempo">0 min</b><span>tiempo con pasajeros</span></div>
+      <div><b id="rLarga">–</b><span>la más larga</span></div>
+    </div>
+    <div id="listaCarreras" class="lista-carreras"></div>
+  </section>
+
+  <!-- ======================= FOTOS ======================= -->
+  <section id="tab-fotos" class="tab" hidden>
+    <div class="fila barra">
+      <select id="diaFotos"></select>
+      <label class="m check"><input type="checkbox" id="soloPax">solo con pasajeros</label>
+    </div>
+    <p class="m" id="resumenFotos"></p>
+    <div id="galeria" class="galeria"></div>
+    <button id="masFotos" class="fantasma" hidden>Ver más fotos</button>
+  </section>
+
+  <!-- ======================= EN VIVO ======================= -->
+  <section id="tab-vivo" class="tab dos" hidden>
     <div class="card">
       <canvas id="vista"></canvas>
       <p class="m" id="pie"></p>
@@ -22,41 +54,230 @@
       </div>
       <p class="m" id="ayudaJaula" hidden>Toca la imagen para marcar las esquinas de la cabina (al menos 3). Solo se cuentan las personas dentro.</p>
     </div>
-    <div class="card" style="margin-top:14px">
-      <div class="fila"><b>Fotos</b>
-        <div class="fila">
-          <select id="dia"></select>
-          <label class="m"><input type="checkbox" id="soloPax" style="width:auto;margin:0 4px 0 0">solo con pasajeros</label>
-        </div>
-      </div>
-      <p class="m" id="resumenFotos"></p>
-      <div id="galeria" class="galeria"></div>
-      <button id="masFotos" class="fantasma" hidden>Ver más</button>
-    </div>
-  </section>
-  <aside>
     <div class="card k">
-      <div><b id="pax">0</b><span>pasajeros (servidor)</span></div>
+      <div><b id="pax">0</b><span>pasajeros ahora</span></div>
       <div><b id="paxEsp">0</b><span>según la cámara</span></div>
-      <div><b id="tiempo">00:00</b><span>carrera</span></div>
+      <div><b id="tiempo">00:00</b><span>carrera en curso</span></div>
       <div><b id="hoy">0</b><span>carreras hoy</span></div>
     </div>
-    <div class="card">
+  </section>
+
+  <!-- ======================= AJUSTES ======================= -->
+  <section id="tab-ajustes" class="tab" hidden>
+    <div class="card angosta">
       <label class="m">Nombre del taxi (placa, conductor…)<br><input id="nombre"></label>
       <div class="fila botones"><button id="guardarNombre">Guardar</button>
         <button id="aprobar" class="fantasma"></button></div>
       <p class="m" id="info"></p>
       <button id="token" class="fantasma">Permitir que la cámara se registre de nuevo</button>
     </div>
-    <div class="card"><div class="m">Carreras</div><table id="carreras"></table></div>
-  </aside>
+  </section>
 </main>
+
+<!-- Detalle de una carrera -->
+<div id="detalle" class="capa" hidden>
+  <div class="hoja">
+    <div class="fila"><h2 id="dTitulo"></h2><button class="fantasma" id="dCerrar">Cerrar ✕</button></div>
+    <div class="k">
+      <div><b id="dDuracion"></b><span>duración</span></div>
+      <div><b id="dPax"></b><span>pasajeros distintos</span></div>
+      <div><b id="dMax"></b><span>máximo a la vez</span></div>
+      <div><b id="dFotos"></b><span>fotos</span></div>
+    </div>
+    <p class="m">Pasajeros a lo largo de la carrera (toca el gráfico para ver la foto de ese momento):</p>
+    <svg id="dGrafico" class="grafico" viewBox="0 0 1000 160" preserveAspectRatio="none"></svg>
+    <div id="dEventos" class="eventos"></div>
+    <div class="fila"><b>Fotos de la carrera</b><label class="m check"><input type="checkbox" id="dSoloPax">solo con pasajeros</label></div>
+    <div id="dGaleria" class="galeria"></div>
+  </div>
+</div>
+
+<!-- Visor de fotos -->
+<div id="visor" class="capa visor" hidden>
+  <button class="fantasma cerrar" id="vCerrar">✕</button>
+  <button class="fantasma flecha izq" id="vAnt">‹</button>
+  <figure><img id="vImg" alt=""><figcaption id="vInfo"></figcaption></figure>
+  <button class="fantasma flecha der" id="vSig">›</button>
+</div>
+
 <script src="/web/comun.js"></script>
 <script>
 const id = location.pathname.split('/').pop();
-const cv = $('vista'), cx = cv.getContext('2d');
-let datos = null, img = new Image(), fotoActual = '', editando = false, puntos = [];
+const hora = ts => new Date(ts * 1000).toLocaleTimeString();
+const horaCorta = ts => new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+let datos = null;
 
+// ---------------------------------------------------------------- pestañas
+let pestana = 'carreras';
+document.querySelectorAll('.pestanas button').forEach(b => b.onclick = () => {
+  pestana = b.dataset.tab;
+  document.querySelectorAll('.pestanas button').forEach(x => x.classList.toggle('activa', x === b));
+  document.querySelectorAll('.tab').forEach(t => t.hidden = t.id !== 'tab-' + pestana);
+  if (pestana === 'vivo') dibujar();
+});
+
+// ---------------------------------------------------------------- visor de fotos
+let visorLista = [], visorI = 0;
+function abrirVisor(lista, i) { visorLista = lista; visorI = i; $('visor').hidden = false; mostrarFoto(); }
+function mostrarFoto() {
+  const f = visorLista[visorI];
+  $('vImg').src = '/fotos/' + f.foto;
+  $('vInfo').innerHTML = `<b>${new Date(f.ts * 1000).toLocaleString()}</b>${f.aprox ? ' (hora aproximada)' : ''}` +
+    ` · <b>${f.n}</b> pasajero${f.n === 1 ? '' : 's'} · ${visorI + 1} de ${visorLista.length}` +
+    ` · <a href="/fotos/${f.foto}" download>descargar</a>`;
+}
+const moverVisor = d => { visorI = (visorI + d + visorLista.length) % visorLista.length; mostrarFoto(); };
+$('vAnt').onclick = () => moverVisor(-1);
+$('vSig').onclick = () => moverVisor(1);
+$('vCerrar').onclick = () => $('visor').hidden = true;
+document.addEventListener('keydown', e => {
+  if (!$('visor').hidden) {
+    if (e.key === 'ArrowLeft') moverVisor(-1);
+    if (e.key === 'ArrowRight') moverVisor(1);
+    if (e.key === 'Escape') $('visor').hidden = true;
+  } else if (!$('detalle').hidden && e.key === 'Escape') $('detalle').hidden = true;
+});
+
+function miniatura(f, i, lista) {
+  const a = document.createElement('a');
+  a.className = 'foto' + (f.n ? ' con' : '');
+  a.innerHTML = `<img src="/fotos/${f.foto}" loading="lazy" alt=""><span>${hora(f.ts)}${f.aprox ? ' ≈' : ''} · ${f.n} pax</span>`;
+  a.onclick = () => abrirVisor(lista, i);
+  return a;
+}
+
+// ---------------------------------------------------------------- días
+async function cargarDias() {
+  const dias = await api(`/api/panel/taxi/${id}/dias`);
+  for (const sel of ['diaCarreras', 'diaFotos']) {
+    $(sel).innerHTML = dias.map(d => `<option value="${d}">${fechaLarga(d)}</option>`).join('') || '<option value="">sin datos todavía</option>';
+  }
+}
+const fechaLarga = d => new Date(d + 'T12:00').toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+// ---------------------------------------------------------------- carreras
+async function cargarCarreras() {
+  const dia = $('diaCarreras').value;
+  if (!dia) { $('listaCarreras').innerHTML = '<p class="m">Cuando la cámara envíe fotos, aquí aparecerán las carreras.</p>'; return; }
+  const { carreras, resumen } = await api(`/api/panel/taxi/${id}/carreras?dia=${dia}`);
+  $('rCarreras').textContent = resumen.carreras;
+  $('rPasajeros').textContent = resumen.pasajeros;
+  $('rTiempo').textContent = durLarga(resumen.tiempo_s);
+  $('rLarga').textContent = resumen.mas_larga_s ? durLarga(resumen.mas_larga_s) : '–';
+  $('avisoCarreras').textContent = resumen.descartadas ? `${resumen.descartadas} descartadas por durar menos de 30 s` : '';
+  const lista = $('listaCarreras');
+  lista.innerHTML = carreras.length ? '' : '<p class="m">No hubo carreras este día.</p>';
+  for (const c of carreras.slice().reverse()) {
+    const art = document.createElement('article');
+    art.className = 'card carrera' + (c.valida ? '' : ' descartada');
+    const fotos = c.fotos.slice(0, 5).map(f => `<img src="/fotos/${f}" loading="lazy" alt="">`).join('');
+    art.innerHTML = `
+      <div class="fila">
+        <div><div class="horas">${horaCorta(c.inicio)} → ${horaCorta(c.fin)}</div>
+          <div class="m">${durLarga(c.duracion)}${c.valida ? '' : ' · descartada (muy corta)'}</div></div>
+        <div class="pax"><b>${c.pasajeros}</b><span>pasajero${c.pasajeros === 1 ? '' : 's'}</span></div>
+      </div>
+      <div class="tira">${fotos}</div>
+      <div class="m">${lineaDeTiempo(c.eventos) || ''}</div>`;
+    art.onclick = () => abrirDetalle(c);
+    lista.appendChild(art);
+  }
+}
+$('diaCarreras').onchange = cargarCarreras;
+
+// ---------------------------------------------------------------- detalle de una carrera
+let detalleFotos = [];
+async function fotosEntre(desde, hasta) {
+  // Una carrera puede pasar la medianoche: se piden los dos días.
+  const dias = [...new Set([desde, hasta].map(t => new Date(t * 1000).toLocaleDateString('sv')))];
+  let fotos = [];
+  for (const d of dias) fotos = fotos.concat(await api(`/api/panel/taxi/${id}/fotos?dia=${d}&desde=${desde}&hasta=${hasta}&limite=2000`));
+  return fotos;
+}
+async function abrirDetalle(c) {
+  $('detalle').hidden = false;
+  $('dTitulo').textContent = `${new Date(c.inicio * 1000).toLocaleDateString()} · ${hora(c.inicio)} → ${hora(c.fin)}`;
+  $('dDuracion').textContent = durLarga(c.duracion);
+  $('dPax').textContent = c.pasajeros;
+  $('dMax').textContent = c.max_pax;
+  $('dFotos').textContent = '…';
+  $('dGaleria').innerHTML = '';
+  $('dEventos').innerHTML = '';
+  $('dGrafico').innerHTML = '';
+  detalleFotos = await fotosEntre(c.inicio - 15, c.fin + 15);
+  $('dFotos').textContent = detalleFotos.length;
+  dibujarGrafico(c, detalleFotos);
+  // Subidas y bajadas, cada una con la foto más cercana a ese momento.
+  $('dEventos').innerHTML = '';
+  for (const [ts, tipo, k, abordo] of c.eventos || []) {
+    const i = masCercana(detalleFotos, ts);
+    const div = document.createElement('div');
+    div.className = 'evento ' + tipo;
+    div.innerHTML = (i >= 0 ? `<img src="/fotos/${detalleFotos[i].foto}" alt="">` : '') +
+      `<div><b>${hora(ts)}</b><br>${tipo === 'sube' ? (k > 1 ? `suben ${k}` : 'sube 1') : (k > 1 ? `bajan ${k}` : 'baja 1')}` +
+      `<br><span class="m">quedan ${abordo} a bordo</span></div>`;
+    if (i >= 0) div.onclick = () => abrirVisor(detalleFotos, i);
+    $('dEventos').appendChild(div);
+  }
+  pintarGaleriaDetalle();
+}
+function masCercana(fotos, ts) {
+  let mejor = -1, dif = 1e12;
+  fotos.forEach((f, i) => { const d = Math.abs(f.ts - ts); if (d < dif) { dif = d; mejor = i; } });
+  return mejor;
+}
+function pintarGaleriaDetalle() {
+  const lista = $('dSoloPax').checked ? detalleFotos.filter(f => f.n) : detalleFotos;
+  $('dGaleria').innerHTML = '';
+  lista.slice(0, 400).forEach((f, i) => $('dGaleria').appendChild(miniatura(f, i, lista)));
+}
+$('dSoloPax').onchange = pintarGaleriaDetalle;
+$('dCerrar').onclick = () => $('detalle').hidden = true;
+
+// Gráfico escalonado de pasajeros por foto, con la carrera sombreada.
+function dibujarGrafico(c, fotos) {
+  const svg = $('dGrafico');
+  if (!fotos.length) { svg.innerHTML = ''; return; }
+  const t0 = fotos[0].ts, t1 = Math.max(fotos[fotos.length - 1].ts, t0 + 1);
+  const max = Math.max(2, ...fotos.map(f => f.n));
+  const x = t => (t - t0) / (t1 - t0) * 1000, y = n => 150 - n / max * 130;
+  let d = `M ${x(fotos[0].ts)} ${y(fotos[0].n)}`;
+  for (let i = 1; i < fotos.length; i++) d += ` H ${x(fotos[i].ts)} V ${y(fotos[i].n)}`;
+  let lineas = '';
+  for (let n = 1; n <= max; n++) lineas += `<line x1="0" x2="1000" y1="${y(n)}" y2="${y(n)}" class="guia"/><text x="4" y="${y(n) - 3}" class="eje">${n}</text>`;
+  svg.innerHTML = `<rect x="${x(c.inicio)}" y="0" width="${Math.max(1, x(c.fin) - x(c.inicio))}" height="160" class="zona"/>` +
+    lineas + `<path d="${d}" class="serie"/>`;
+  svg.onclick = e => {
+    const r = svg.getBoundingClientRect();
+    const ts = t0 + (e.clientX - r.left) / r.width * (t1 - t0);
+    abrirVisor(fotos, masCercana(fotos, ts));
+  };
+}
+
+// ---------------------------------------------------------------- fotos del día
+let ultimaFoto = 0, fotosDia = [];
+async function cargarFotos(mas) {
+  const dia = $('diaFotos').value;
+  if (!dia) { $('galeria').innerHTML = ''; $('resumenFotos').textContent = 'Todavía no hay fotos.'; return; }
+  const q = `dia=${dia}&solo_pasajeros=${$('soloPax').checked}&limite=200&desde=${mas ? ultimaFoto + 0.0005 : 0}`;
+  const fotos = await api(`/api/panel/taxi/${id}/fotos?${q}`);
+  if (!mas) { $('galeria').innerHTML = ''; fotosDia = []; }
+  const base = fotosDia.length;
+  fotosDia = fotosDia.concat(fotos);
+  fotos.forEach((f, i) => $('galeria').appendChild(miniatura(f, base + i, fotosDia)));
+  if (fotos.length) ultimaFoto = fotos[fotos.length - 1].ts;
+  $('masFotos').hidden = fotos.length < 200;
+  $('resumenFotos').textContent = fotosDia.length
+    ? `${fotosDia.length} fotos · toca una para verla grande · borde verde = con pasajeros · ≈ = hora aproximada`
+    : 'No hay fotos para este filtro.';
+}
+$('diaFotos').onchange = () => cargarFotos(false);
+$('soloPax').onchange = () => cargarFotos(false);
+$('masFotos').onclick = () => cargarFotos(true);
+
+// ---------------------------------------------------------------- en vivo y jaula
+const cv = $('vista'), cx = cv.getContext('2d');
+let img = new Image(), fotoActual = '', editando = false, puntos = [];
 function dibujar() {
   if (!img.naturalWidth) return;
   cv.width = img.naturalWidth * 2; cv.height = img.naturalHeight * 2;
@@ -84,18 +305,16 @@ function dibujar() {
   }
 }
 img.onload = dibujar;
-
 cv.onclick = e => {
   if (!editando) return;
   const r = cv.getBoundingClientRect();
   puntos.push([(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height].map(v => +v.toFixed(4)));
   dibujar();
 };
-
 function modoEdicion(on) {
   editando = on; puntos = on ? [] : puntos;
-  for (const b of ['guardarJaula', 'cancelar', 'ayudaJaula']) $(b).hidden = !on;
-  $('borrarJaula').hidden = !on; $('editar').hidden = on;
+  for (const b of ['guardarJaula', 'cancelar', 'ayudaJaula', 'borrarJaula']) $(b).hidden = !on;
+  $('editar').hidden = on;
   dibujar();
 }
 $('editar').onclick = () => modoEdicion(true);
@@ -107,6 +326,8 @@ $('guardarJaula').onclick = async () => {
 $('borrarJaula').onclick = async () => {
   await api('/api/panel/taxi/' + id, { jaula: [] }); datos.jaula = []; modoEdicion(false);
 };
+
+// ---------------------------------------------------------------- ajustes
 $('guardarNombre').onclick = () => api('/api/panel/taxi/' + id, { nombre: $('nombre').value });
 $('aprobar').onclick = () => api('/api/panel/taxi/' + id, { aprobado: !datos.aprobado }).then(cargar);
 $('token').onclick = () => {
@@ -114,6 +335,7 @@ $('token').onclick = () => {
     api('/api/panel/taxi/' + id, { reiniciar_token: true });
 };
 
+// ---------------------------------------------------------------- estado del taxi
 async function cargar() {
   try {
     datos = await api('/api/panel/taxi/' + id);
@@ -124,44 +346,21 @@ async function cargar() {
     $('tiempo').textContent = dur(datos.carrera_s); $('hoy').textContent = datos.carreras_hoy;
     $('aprobar').textContent = datos.aprobado ? 'Bloquear cámara' : 'Aprobar cámara';
     $('info').innerHTML = `ID ${datos.id} · firmware ${esc(datos.fw || '–')}<br>` +
-      `${datos.en_linea ? 'En línea' : 'Visto ' + hace(datos.visto)} · WiFi ${datos.rssi ?? '–'} dBm · ${datos.temp ?? '–'} °C · ${datos.fotos_recibidas} fotos recibidas`;
+      `${datos.en_linea ? 'En línea' : 'Visto ' + hace(datos.visto)} · WiFi ${datos.rssi ?? '–'} dBm · ${datos.temp ?? '–'} °C` +
+      `<br>${datos.fotos_recibidas} fotos recibidas${datos.cola ? ` · ${datos.cola} fotos esperando en la cámara` : ''}`;
     $('pie').textContent = datos.ultima ? `Última foto: ${new Date(datos.ultima.ts * 1000).toLocaleString()} · verde = cuenta, gris = fuera de la jaula` : 'Aún no hay fotos';
     if (datos.ultima_foto && datos.ultima_foto !== fotoActual) { fotoActual = datos.ultima_foto; img.src = '/fotos/' + fotoActual; }
-    else dibujar();
-    $('carreras').innerHTML = filaCarreraTitulo(false) + datos.carreras.map(c => filaCarrera(c, false)).join('');
+    else if (pestana === 'vivo') dibujar();
   } catch (e) { $('pie').textContent = 'Sin conexión con el servidor'; }
 }
-// Galería: fotos del día elegido, en orden de hora, con lo que contó el servidor.
-let ultimaFoto = 0;
-async function cargarDias() {
-  const dias = await api(`/api/panel/taxi/${id}/dias`);
-  const actual = $('dia').value;
-  $('dia').innerHTML = dias.map(d => `<option>${d}</option>`).join('') || '<option value="">sin fotos</option>';
-  if (actual && dias.includes(actual)) $('dia').value = actual;
-}
-const hora = ts => new Date(ts * 1000).toLocaleTimeString();
-function tarjeta(f) {
-  return `<a href="/fotos/${f.foto}" target="_blank" class="foto${f.n ? ' con' : ''}">
-    <img src="/fotos/${f.foto}" loading="lazy" alt="">
-    <span>${hora(f.ts)}${f.aprox ? ' ≈' : ''} · ${f.n} pax</span></a>`;
-}
-async function cargarFotos(mas) {
-  if (!$('dia').value) { $('galeria').innerHTML = ''; return; }
-  const q = `dia=${$('dia').value}&solo_pasajeros=${$('soloPax').checked}&limite=200&desde=${mas ? ultimaFoto + 0.0005 : 0}`;
-  const fotos = await api(`/api/panel/taxi/${id}/fotos?${q}`);
-  if (!mas) $('galeria').innerHTML = '';
-  $('galeria').insertAdjacentHTML('beforeend', fotos.map(tarjeta).join(''));
-  if (fotos.length) ultimaFoto = fotos[fotos.length - 1].ts;
-  $('masFotos').hidden = fotos.length < 200;
-  const total = $('galeria').children.length;
-  $('resumenFotos').textContent = total ? `${total} fotos mostradas · ≈ = hora aproximada (la cámara arrancó sin internet)` : 'No hay fotos para este filtro.';
-}
-$('dia').onchange = () => cargarFotos(false);
-$('soloPax').onchange = () => cargarFotos(false);
-$('masFotos').onclick = () => cargarFotos(true);
-cargarDias().then(() => cargarFotos(false));
 
-cargar(); setInterval(() => { if (!editando) cargar(); }, 1500);
+cargarDias().then(() => { cargarCarreras(); cargarFotos(false); });
+cargar();
+setInterval(() => { if (!editando) cargar(); }, 2000);
+// Las carreras se refrescan solas mientras miras el día de hoy.
+setInterval(() => {
+  if (pestana === 'carreras' && $('detalle').hidden && $('diaCarreras').selectedIndex === 0) cargarCarreras();
+}, 15000);
 </script>
 </body>
 </html>

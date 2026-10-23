@@ -244,6 +244,24 @@ def test_lote_de_una_semana_sin_internet(srv):
     assert len(fotos) == 60 and not fotos[0]["aprox"]
 
 
+def test_carreras_del_dia_y_fotos_de_una_carrera(srv):
+    _, cli, personas = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}"}
+    t0 = __import__("time").time() - 3600
+    personas.append(PERSONA)
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 1) for i in range(90)]))
+    personas.clear()
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 0) for i in range(90, 110)]))
+    dia = __import__("datetime").datetime.fromtimestamp(t0).strftime("%Y-%m-%d")
+    r = cli.get(f"/api/panel/taxi/TX-000001/carreras?dia={dia}", headers=PANEL).json()
+    assert r["resumen"]["carreras"] == 1 and r["resumen"]["pasajeros"] == 1
+    c = r["carreras"][0]
+    fotos = cli.get(f"/api/panel/taxi/TX-000001/fotos?dia={dia}&desde={c['inicio']}&hasta={c['fin']}",
+                    headers=PANEL).json()
+    assert 85 <= len(fotos) <= 92 and all(c["inicio"] <= f["ts"] <= c["fin"] + 0.01 for f in fotos)
+
+
 def test_lote_danado_se_rechaza(srv):
     _, cli, _ = srv
     tok = registrar(cli)
