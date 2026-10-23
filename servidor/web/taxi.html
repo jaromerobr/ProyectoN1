@@ -13,6 +13,7 @@
 <nav class="pestanas">
   <button data-tab="carreras" class="activa">Carreras</button>
   <button data-tab="fotos">Fotos</button>
+  <button data-tab="jaula">Jaula</button>
   <button data-tab="vivo">En vivo</button>
   <button data-tab="ajustes">Ajustes</button>
 </nav>
@@ -46,13 +47,7 @@
     <div class="card">
       <canvas id="vista"></canvas>
       <p class="m" id="pie"></p>
-      <div class="fila botones">
-        <button id="editar">Dibujar jaula</button>
-        <button id="guardarJaula" hidden>Guardar jaula</button>
-        <button id="borrarJaula" class="fantasma" hidden>Quitar jaula</button>
-        <button id="cancelar" class="fantasma" hidden>Cancelar</button>
-      </div>
-      <p class="m" id="ayudaJaula" hidden>Toca la imagen para marcar las esquinas de la cabina (al menos 3). Solo se cuentan las personas dentro.</p>
+      <p class="m">La jaula (naranja) se edita en la pestaña <b>Jaula</b>.</p>
     </div>
     <div class="card k">
       <div><b id="pax">0</b><span>pasajeros ahora</span></div>
@@ -62,9 +57,63 @@
     </div>
   </section>
 
+  <!-- ======================= JAULA ======================= -->
+  <section id="tab-jaula" class="tab dos" hidden>
+    <div class="card">
+      <div class="fila barra">
+        <select id="diaJaula"></select>
+        <button class="fantasma" id="jOtra">Otra foto</button>
+        <span class="m" id="jFotoInfo"></span>
+      </div>
+      <canvas id="jLienzo" class="lienzo"></canvas>
+      <p class="m">Toca la foto para agregar una esquina · arrastra una esquina para moverla · doble clic sobre una esquina para borrarla.
+        <span style="color:var(--ok)">Verde</span> = cuenta como pasajero · gris = queda fuera (no cuenta).</p>
+      <div class="fila botones">
+        <button id="jGuardar">Guardar jaula</button>
+        <button class="fantasma" id="jDeshacer">Deshacer</button>
+        <button class="fantasma" id="jLimpiar">Empezar de cero</button>
+        <button class="fantasma" id="jTodo">Toda la imagen</button>
+      </div>
+      <p class="m" id="jEstado"></p>
+      <div class="fila"><b>Cómo queda en otras fotos del día</b><span class="m">fotos donde se vio a alguien</span></div>
+      <div id="jMuestras" class="galeria"></div>
+    </div>
+    <div class="card">
+      <b>Reanalizar el día con esta jaula</b>
+      <p class="m">Vuelve a contar todas las fotos guardadas del día elegido con la jaula de la izquierda y rearma las carreras.
+        Primero ves qué cambia; no se modifica nada hasta que aplicas.</p>
+      <button id="jPrevia">Ver qué cambia</button>
+      <div id="jResultado"></div>
+    </div>
+  </section>
+
   <!-- ======================= AJUSTES ======================= -->
-  <section id="tab-ajustes" class="tab" hidden>
-    <div class="card angosta">
+  <section id="tab-ajustes" class="tab dos" hidden>
+    <div class="card">
+      <b>Ajustes de la cámara</b>
+      <p class="m">Se mandan a la cámara con la respuesta a su próxima foto: funciona aunque esté en el taxi, sin saber su IP.</p>
+      <div class="form-ajustes">
+        <label class="m">Resolución (cambiarla reinicia la cámara)<select data-k="fs">
+          <option value="qvga">320×240 · rápida y liviana (recomendada)</option><option value="vga">640×480 · más detalle, más lenta</option></select></label>
+        <label class="m">Calidad de las fotos<select data-k="q">
+          <option value="40">Baja · menos datos</option><option value="60">Media (recomendada)</option><option value="80">Alta · más datos</option></select></label>
+        <label class="m">Qué detecta la cámara<select data-k="model">
+          <option value="personas">Cabezas (modelo propio)</option><option value="caras">Caras (Espressif)</option></select></label>
+        <label class="m">Sensibilidad<select data-k="pthr">
+          <option value="0.3">Alta · cuenta más, más errores</option><option value="0.4">Media-alta</option>
+          <option value="0.5">Normal</option><option value="0.65">Baja · menos errores</option></select></label>
+        <label class="m">Unir detecciones de la misma cabeza<select data-k="mrg">
+          <option value="0">No unir</option><option value="1.5">Poco</option><option value="2.5">Normal</option><option value="4">Mucho</option></select></label>
+        <label class="m">Modo noche<select data-k="night"><option value="0">No</option><option value="1">Sí</option></select></label>
+        <label class="m">Orientación<select data-k="rot"><option value="0">Normal</option><option value="1">Girada 180°</option></select></label>
+        <label class="m">Detección en la cámara<select data-k="det"><option value="1">Sí</option><option value="0">No (solo fotos)</option></select></label>
+        <label class="m">Fotos para entrenar el modelo<select data-k="cap">
+          <option value="0">No</option><option value="2">Cada 2 s</option><option value="5">Cada 5 s</option><option value="10">Cada 10 s</option></select></label>
+      </div>
+      <div class="fila botones"><button id="guardarAjustes">Enviar a la cámara</button></div>
+      <p class="m" id="estadoAjustes"></p>
+    </div>
+    <div class="card">
       <label class="m">Nombre del taxi (placa, conductor…)<br><input id="nombre"></label>
       <div class="fila botones"><button id="guardarNombre">Guardar</button>
         <button id="aprobar" class="fantasma"></button></div>
@@ -114,6 +163,7 @@ document.querySelectorAll('.pestanas button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.pestanas button').forEach(x => x.classList.toggle('activa', x === b));
   document.querySelectorAll('.tab').forEach(t => t.hidden = t.id !== 'tab-' + pestana);
   if (pestana === 'vivo') dibujar();
+  if (pestana === 'jaula' && jaulaEdit === null) cargarJaulaDia();
 });
 
 // ---------------------------------------------------------------- visor de fotos
@@ -149,7 +199,7 @@ function miniatura(f, i, lista) {
 // ---------------------------------------------------------------- días
 async function cargarDias() {
   const dias = await api(`/api/panel/taxi/${id}/dias`);
-  for (const sel of ['diaCarreras', 'diaFotos']) {
+  for (const sel of ['diaCarreras', 'diaFotos', 'diaJaula']) {
     $(sel).innerHTML = dias.map(d => `<option value="${d}">${fechaLarga(d)}</option>`).join('') || '<option value="">sin datos todavía</option>';
   }
 }
@@ -275,57 +325,184 @@ $('diaFotos').onchange = () => cargarFotos(false);
 $('soloPax').onchange = () => cargarFotos(false);
 $('masFotos').onclick = () => cargarFotos(true);
 
-// ---------------------------------------------------------------- en vivo y jaula
-const cv = $('vista'), cx = cv.getContext('2d');
-let img = new Image(), fotoActual = '', editando = false, puntos = [];
-function dibujar() {
-  if (!img.naturalWidth) return;
-  cv.width = img.naturalWidth * 2; cv.height = img.naturalHeight * 2;
-  cx.drawImage(img, 0, 0, cv.width, cv.height);
-  const W = cv.width, H = cv.height;
-  const jaula = editando ? puntos : (datos?.jaula || []);
+// ---------------------------------------------------------------- dibujo de foto + jaula + personas
+// Mismo criterio que el servidor: una persona cuenta si el centro de su caja
+// cae dentro del polígono (sin jaula, todas cuentan).
+function dentroDe(x, y, jaula) {
+  if (jaula.length < 3) return true;
+  let dentro = false;
+  for (let i = 0, j = jaula.length - 1; i < jaula.length; j = i++) {
+    const [xi, yi] = jaula[i], [xj, yj] = jaula[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) dentro = !dentro;
+  }
+  return dentro;
+}
+function pintar(canvas, imagen, dets, jaula, { esquinas = false, etiquetas = true } = {}) {
+  if (!imagen.naturalWidth) return;
+  const c = canvas.getContext('2d');
+  canvas.width = imagen.naturalWidth * 2; canvas.height = imagen.naturalHeight * 2;
+  const W = canvas.width, H = canvas.height;
+  c.drawImage(imagen, 0, 0, W, H);
   if (jaula.length) {
-    cx.beginPath(); jaula.forEach(([x, y], i) => i ? cx.lineTo(x * W, y * H) : cx.moveTo(x * W, y * H));
-    if (jaula.length > 2) cx.closePath();
-    cx.fillStyle = 'rgba(255,159,10,.12)'; cx.fill();
-    cx.strokeStyle = '#ff9f0a'; cx.lineWidth = 4; cx.stroke();
-    jaula.forEach(([x, y]) => { cx.beginPath(); cx.arc(x * W, y * H, 9, 0, 7); cx.fillStyle = '#ff9f0a'; cx.fill(); });
+    c.beginPath(); jaula.forEach(([x, y], i) => i ? c.lineTo(x * W, y * H) : c.moveTo(x * W, y * H));
+    if (jaula.length > 2) c.closePath();
+    c.fillStyle = 'rgba(255,159,10,.12)'; c.fill();
+    c.strokeStyle = '#ff9f0a'; c.lineWidth = 4; c.stroke();
+    if (esquinas) jaula.forEach(([x, y]) => { c.beginPath(); c.arc(x * W, y * H, 11, 0, 7); c.fillStyle = '#ff9f0a'; c.fill(); c.strokeStyle = '#000'; c.lineWidth = 2; c.stroke(); });
   }
-  if (!editando && datos?.ultima) {
-    cx.font = 'bold 22px system-ui'; cx.lineWidth = 4;
-    for (const [x1, y1, x2, y2, p, dentro] of datos.ultima.dets) {
-      const col = dentro ? '#30c26b' : '#8a8a90';
-      cx.strokeStyle = cx.fillStyle = col;
-      cx.strokeRect(x1 * W, y1 * H, (x2 - x1) * W, (y2 - y1) * H);
-      const t = (dentro ? 'pasajero ' : 'fuera ') + Math.round(p * 100) + '%';
-      const w = cx.measureText(t).width + 12;
-      cx.fillRect(x1 * W, Math.max(0, y1 * H - 28), w, 26);
-      cx.fillStyle = '#000'; cx.fillText(t, x1 * W + 6, Math.max(20, y1 * H - 8));
-    }
+  c.font = 'bold 22px system-ui';
+  for (const [x1, y1, x2, y2, p] of dets || []) {
+    const dentro = dentroDe((x1 + x2) / 2, (y1 + y2) / 2, jaula);
+    c.lineWidth = 4; c.strokeStyle = c.fillStyle = dentro ? '#30c26b' : '#8a8a90';
+    c.strokeRect(x1 * W, y1 * H, (x2 - x1) * W, (y2 - y1) * H);
+    if (!etiquetas) continue;
+    const t = (dentro ? 'pasajero ' : 'fuera ') + Math.round(p * 100) + '%';
+    const w = c.measureText(t).width + 12;
+    c.fillRect(x1 * W, Math.max(0, y1 * H - 28), w, 26);
+    c.fillStyle = '#000'; c.fillText(t, x1 * W + 6, Math.max(20, y1 * H - 8));
   }
 }
+const cargarImagen = src => new Promise(ok => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => ok(i); i.src = src; });
+
+// ---------------------------------------------------------------- en vivo
+const cv = $('vista');
+let img = new Image(), fotoActual = '';
+function dibujar() { pintar(cv, img, datos?.ultima?.dets, datos?.jaula || []); }
 img.onload = dibujar;
-cv.onclick = e => {
-  if (!editando) return;
-  const r = cv.getBoundingClientRect();
-  puntos.push([(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height].map(v => +v.toFixed(4)));
-  dibujar();
+
+// ---------------------------------------------------------------- editor de jaula
+const jl = $('jLienzo');
+let jaulaEdit = null, historial = [], jFotos = [], jIdx = 0, jImg = new Image(), jDets = [], arrastrando = -1, muestras = [];
+const redibujarJaula = () => {
+  pintar(jl, jImg, jDets, jaulaEdit, { esquinas: true });
+  for (const m of muestras) pintar(m.canvas, m.img, m.dets, jaulaEdit, { etiquetas: false });
+  const dentro = jDets.filter(([x1, y1, x2, y2]) => dentroDe((x1 + x2) / 2, (y1 + y2) / 2, jaulaEdit)).length;
+  $('jEstado').textContent = (jaulaEdit.length >= 3 ? `Jaula de ${jaulaEdit.length} esquinas` : jaulaEdit.length ? 'Marca al menos 3 esquinas' : 'Sin jaula: cuenta a todos') +
+    ` · en esta foto: ${dentro} pasajero(s), ${jDets.length - dentro} fuera` +
+    (JSON.stringify(jaulaEdit) !== JSON.stringify(datos?.jaula || []) ? ' · cambios sin guardar' : '');
 };
-function modoEdicion(on) {
-  editando = on; puntos = on ? [] : puntos;
-  for (const b of ['guardarJaula', 'cancelar', 'ayudaJaula', 'borrarJaula']) $(b).hidden = !on;
-  $('editar').hidden = on;
-  dibujar();
+const guardarHistorial = () => { historial.push(JSON.stringify(jaulaEdit)); if (historial.length > 50) historial.shift(); };
+function puntoEn(e) {
+  const r = jl.getBoundingClientRect();
+  return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
 }
-$('editar').onclick = () => modoEdicion(true);
-$('cancelar').onclick = () => modoEdicion(false);
-$('guardarJaula').onclick = async () => {
-  if (puntos.length < 3) { alert('Marca al menos 3 esquinas.'); return; }
-  await api('/api/panel/taxi/' + id, { jaula: puntos }); datos.jaula = puntos; modoEdicion(false);
+function esquinaCerca(e) {
+  const r = jl.getBoundingClientRect();
+  return jaulaEdit.findIndex(([x, y]) => Math.hypot(x * r.width - (e.clientX - r.left), y * r.height - (e.clientY - r.top)) < 16);
+}
+jl.onpointerdown = e => {
+  const i = esquinaCerca(e);
+  guardarHistorial();
+  if (i >= 0) { arrastrando = i; jl.setPointerCapture(e.pointerId); return; }
+  // Nueva esquina: se inserta en el lado más cercano para no cruzar la figura.
+  const p = puntoEn(e);
+  if (jaulaEdit.length < 3) jaulaEdit.push(p);
+  else {
+    let mejor = 0, dist = 1e9;
+    for (let k = 0; k < jaulaEdit.length; k++) {
+      const a = jaulaEdit[k], b = jaulaEdit[(k + 1) % jaulaEdit.length];
+      const d = Math.hypot(p[0] - a[0], p[1] - a[1]) + Math.hypot(p[0] - b[0], p[1] - b[1]) - Math.hypot(a[0] - b[0], a[1] - b[1]);
+      if (d < dist) { dist = d; mejor = k + 1; }
+    }
+    jaulaEdit.splice(mejor, 0, p);
+  }
+  redibujarJaula();
 };
-$('borrarJaula').onclick = async () => {
-  await api('/api/panel/taxi/' + id, { jaula: [] }); datos.jaula = []; modoEdicion(false);
+jl.onpointermove = e => {
+  if (arrastrando < 0) { jl.style.cursor = esquinaCerca(e) >= 0 ? 'grab' : 'crosshair'; return; }
+  jaulaEdit[arrastrando] = puntoEn(e);
+  redibujarJaula();
 };
+jl.onpointerup = () => { arrastrando = -1; };
+jl.ondblclick = e => {
+  const i = esquinaCerca(e);
+  if (i >= 0) { jaulaEdit.splice(i, 1); redibujarJaula(); }
+};
+$('jDeshacer').onclick = () => { if (historial.length) { jaulaEdit = JSON.parse(historial.pop()); redibujarJaula(); } };
+$('jLimpiar').onclick = () => { guardarHistorial(); jaulaEdit = []; redibujarJaula(); };
+$('jTodo').onclick = () => { guardarHistorial(); jaulaEdit = [[0, 0], [1, 0], [1, 1], [0, 1]]; redibujarJaula(); };
+$('jGuardar').onclick = async () => {
+  if (jaulaEdit.length && jaulaEdit.length < 3) { alert('Marca al menos 3 esquinas (o "Empezar de cero" para quitar la jaula).'); return; }
+  const j = jaulaEdit.map(([x, y]) => [+x.toFixed(4), +y.toFixed(4)]);
+  await api('/api/panel/taxi/' + id, { jaula: j });
+  datos.jaula = j; jaulaEdit = j.map(p => p.slice());
+  redibujarJaula();
+  $('jEstado').textContent += ' · guardada: se usa en las fotos nuevas';
+};
+
+async function mostrarFotoJaula() {
+  if (!jFotos.length) { $('jFotoInfo').textContent = 'No hay fotos con personas este día.'; return; }
+  const f = jFotos[jIdx % jFotos.length];
+  $('jFotoInfo').textContent = `${hora(f.ts)} · ${jIdx % jFotos.length + 1} de ${jFotos.length}`;
+  const [imagen, info] = await Promise.all([cargarImagen('/fotos/' + f.foto), api(`/api/panel/taxi/${id}/foto_info?foto=${encodeURIComponent(f.foto)}`)]);
+  jImg = imagen; jDets = info.dets || [];
+  redibujarJaula();
+}
+async function cargarJaulaDia() {
+  if (jaulaEdit === null) jaulaEdit = (datos?.jaula || []).map(p => p.slice());
+  const dia = $('diaJaula').value;
+  jFotos = dia ? await api(`/api/panel/taxi/${id}/fotos?dia=${dia}&solo_pasajeros=true&limite=2000`) : [];
+  jIdx = Math.max(0, jFotos.length - 1);
+  await mostrarFotoJaula();
+  // Muestra repartida a lo largo del día, para ver la jaula en distintas situaciones.
+  const elegidas = jFotos.length <= 8 ? jFotos : Array.from({ length: 8 }, (_, k) => jFotos[Math.floor(k * (jFotos.length - 1) / 7)]);
+  $('jMuestras').innerHTML = '';
+  muestras = [];
+  for (const f of elegidas) {
+    const a = document.createElement('a');
+    a.className = 'foto';
+    const canvas = document.createElement('canvas');
+    a.appendChild(canvas);
+    a.insertAdjacentHTML('beforeend', `<span>${hora(f.ts)}</span>`);
+    a.onclick = () => { jIdx = jFotos.indexOf(f); mostrarFotoJaula(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+    $('jMuestras').appendChild(a);
+    const [imagen, info] = await Promise.all([cargarImagen('/fotos/' + f.foto), api(`/api/panel/taxi/${id}/foto_info?foto=${encodeURIComponent(f.foto)}`)]);
+    const m = { canvas, img: imagen, dets: info.dets || [] };
+    muestras.push(m);
+    pintar(canvas, imagen, m.dets, jaulaEdit, { etiquetas: false });
+  }
+}
+$('jOtra').onclick = () => { jIdx++; mostrarFotoJaula(); };
+$('diaJaula').onchange = () => { $('jResultado').innerHTML = ''; cargarJaulaDia(); };
+
+// Reanalizar: vista previa y aplicar.
+const resumenTexto = r => `${r.carreras} carrera${r.carreras === 1 ? '' : 's'} · ${durLarga(r.tiempo_s)} · ${r.pasajeros} pasajero${r.pasajeros === 1 ? '' : 's'}`;
+async function reanalizar(aplicar) {
+  const dia = $('diaJaula').value;
+  if (!dia) return;
+  if (jaulaEdit.length && jaulaEdit.length < 3) { alert('Marca al menos 3 esquinas.'); return; }
+  $('jResultado').innerHTML = '<p class="m">Reanalizando las fotos del día…</p>';
+  const r = await api(`/api/panel/taxi/${id}/reanalizar`, { dia, jaula: jaulaEdit, aplicar });
+  const div = $('jResultado');
+  div.innerHTML = `
+    <div class="comparar">
+      <div><span class="m">Antes</span><b>${resumenTexto(r.antes)}</b></div>
+      <div><span class="m">${r.aplicado ? 'Ahora' : 'Con esta jaula'}</span><b>${resumenTexto(r.despues)}</b></div>
+    </div>
+    <p class="m">${r.fotos} fotos revisadas · <b>${r.quitadas}</b> con personas que quedan fuera (falsos positivos quitados)` +
+    (r.agregadas ? ` · <b>${r.agregadas}</b> con personas que ahora sí cuentan` : '') + `.</p>
+    ${r.aplicado ? '<p class="ok">Aplicado: las carreras y el conteo de ese día ya usan esta jaula.</p>'
+      : (r.cambios ? '<button id="jAplicar">Aplicar a este día y guardar la jaula</button>' : '<p class="m">Con esta jaula no cambia nada en este día.</p>')}
+    <div class="galeria" id="jCambios"></div>`;
+  if ($('jAplicar')) $('jAplicar').onclick = async () => {
+    if (!confirm('Se reemplazan el conteo de las fotos y las carreras de este día. ¿Seguir?')) return;
+    await $('jGuardar').onclick();
+    await reanalizar(true);
+    cargarCarreras();
+  };
+  // Fotos que cambian, con las personas pintadas según la jaula.
+  for (const c of r.ejemplos.slice(0, 24)) {
+    const a = document.createElement('a');
+    a.className = 'foto';
+    const canvas = document.createElement('canvas');
+    a.appendChild(canvas);
+    a.insertAdjacentHTML('beforeend', `<span>${hora(c.ts)} · ${c.antes} → ${c.despues} pax</span>`);
+    a.onclick = () => abrirVisor(r.ejemplos.map(e => ({ foto: e.foto, ts: e.ts, n: e.despues })), r.ejemplos.indexOf(c));
+    $('jCambios').appendChild(a);
+    cargarImagen('/fotos/' + c.foto).then(imagen => pintar(canvas, imagen, c.dets, jaulaEdit, { etiquetas: false }));
+  }
+}
+$('jPrevia').onclick = () => reanalizar(false);
 
 // ---------------------------------------------------------------- ajustes
 $('guardarNombre').onclick = () => api('/api/panel/taxi/' + id, { nombre: $('nombre').value });
@@ -333,6 +510,36 @@ $('aprobar').onclick = () => api('/api/panel/taxi/' + id, { aprobado: !datos.apr
 $('token').onclick = () => {
   if (confirm('La cámara podrá pedir un token nuevo. Úsalo si se reinstaló o se borró su memoria.'))
     api('/api/panel/taxi/' + id, { reiniciar_token: true });
+};
+
+// ---------------------------------------------------------------- ajustes de la cámara
+let ajustesTocados = false;
+const selectsAjustes = () => [...document.querySelectorAll('.form-ajustes select')];
+selectsAjustes().forEach(s => s.onchange = () => { ajustesTocados = true; });
+// Valor de la cámara (o el pedido en el panel) en el formato de las opciones.
+function valorAjuste(k) {
+  const v = datos.ajustes?.[k] ?? datos.cfg_camara?.[k];
+  if (v === undefined) return null;
+  return String(typeof v === 'number' ? +v.toFixed(2) : v);
+}
+function pintarAjustes() {
+  if (!ajustesTocados) for (const s of selectsAjustes()) {
+    const v = valorAjuste(s.dataset.k);
+    if (v !== null && [...s.options].some(o => o.value === v)) s.value = v;
+  }
+  const cam = datos.cfg_camara || {};
+  $('estadoAjustes').innerHTML = !Object.keys(cam).length
+    ? 'La cámara todavía no informó sus ajustes (necesita firmware 3.3 o más nuevo).'
+    : datos.ajustes_pendientes
+      ? '<b style="color:var(--acc)">Pendiente:</b> la cámara los aplica cuando envíe su próxima foto (si está sin internet, al volver a conectarse).'
+      : '<span class="ok">✓ La cámara tiene estos ajustes.</span>';
+}
+$('guardarAjustes').onclick = async () => {
+  const ajustes = {};
+  for (const s of selectsAjustes()) ajustes[s.dataset.k] = s.dataset.k === 'model' || s.dataset.k === 'fs' ? s.value : +s.value;
+  await api('/api/panel/taxi/' + id, { ajustes });
+  ajustesTocados = false;
+  await cargar();
 };
 
 // ---------------------------------------------------------------- estado del taxi
@@ -347,7 +554,9 @@ async function cargar() {
     $('aprobar').textContent = datos.aprobado ? 'Bloquear cámara' : 'Aprobar cámara';
     $('info').innerHTML = `ID ${datos.id} · firmware ${esc(datos.fw || '–')}<br>` +
       `${datos.en_linea ? 'En línea' : 'Visto ' + hace(datos.visto)} · WiFi ${datos.rssi ?? '–'} dBm · ${datos.temp ?? '–'} °C` +
-      `<br>${datos.fotos_recibidas} fotos recibidas${datos.cola ? ` · ${datos.cola} fotos esperando en la cámara` : ''}`;
+      `<br>${datos.fotos_recibidas} fotos recibidas${datos.cola ? ` · ${datos.cola} fotos esperando en la cámara` : ''}` +
+      (datos.ip_local ? `<br>IP en su red: <b>${esc(datos.ip_local)}</b> · <a href="http://${esc(datos.ip_local)}" target="_blank">abrir su página</a> (solo desde la misma WiFi)` : '');
+    pintarAjustes();
     $('pie').textContent = datos.ultima ? `Última foto: ${new Date(datos.ultima.ts * 1000).toLocaleString()} · verde = cuenta, gris = fuera de la jaula` : 'Aún no hay fotos';
     if (datos.ultima_foto && datos.ultima_foto !== fotoActual) { fotoActual = datos.ultima_foto; img.src = '/fotos/' + fotoActual; }
     else if (pestana === 'vivo') dibujar();
@@ -356,7 +565,7 @@ async function cargar() {
 
 cargarDias().then(() => { cargarCarreras(); cargarFotos(false); });
 cargar();
-setInterval(() => { if (!editando) cargar(); }, 2000);
+setInterval(cargar, 2000);
 // Las carreras se refrescan solas mientras miras el día de hoy.
 setInterval(() => {
   if (pestana === 'carreras' && $('detalle').hidden && $('diaCarreras').selectedIndex === 0) cargarCarreras();

@@ -74,6 +74,9 @@ with _db_lock:
     """)
     # Columnas agregadas después (bases de datos ya creadas).
     for tabla, col in (("dispositivos", "cola INTEGER DEFAULT 0"),
+                       ("dispositivos", "ajustes TEXT DEFAULT '{}'"), ("dispositivos", "ajustes_ver INTEGER DEFAULT 0"),
+                       ("dispositivos", "cfg_camara TEXT"), ("dispositivos", "ajustes_aplicados INTEGER DEFAULT 0"),
+                       ("dispositivos", "ip_local TEXT"),
                        ("carreras", "pasajeros INTEGER"), ("carreras", "eventos TEXT")):
         try:
             _db.execute(f"ALTER TABLE {tabla} ADD COLUMN {col}")
@@ -309,26 +312,49 @@ def procesar_foto(d, datos, ts_camara, conteo):
     return rel, n, estado
 
 
-def _actualizar_dispositivo(d, rel, n, conteo, estado, recibidas, cola, fw, rssi, temp):
+def _actualizar_dispositivo(d, rel, n, conteo, estado, recibidas, cola, fw, rssi, temp,
+                            cfg=None, ajustes_ver=None, ip=None):
     db("UPDATE dispositivos SET visto = ?, fw = COALESCE(?, fw), rssi = COALESCE(?, rssi), "
        "temp = COALESCE(?, temp), ultima_foto = ?, pax = ?, pax_esp = ?, estado = ?, cola = ?, "
-       "fotos_recibidas = fotos_recibidas + ? WHERE id = ?",
-       (time.time(), fw, rssi, temp, rel, n, conteo, estado, cola, recibidas, d["id"]))
+       "fotos_recibidas = fotos_recibidas + ?, cfg_camara = COALESCE(?, cfg_camara), "
+       "ajustes_aplicados = COALESCE(?, ajustes_aplicados), ip_local = COALESCE(?, ip_local) WHERE id = ?",
+       (time.time(), fw, rssi, temp, rel, n, conteo, estado, cola, recibidas, cfg, ajustes_ver, ip, d["id"]))
 
 
-def _respuesta(estado, n, conteo, **extra):
+# Ajustes de la cámara que se pueden cambiar desde el panel, con sus valores válidos.
+AJUSTES_CAMARA = {
+    "fs": ("qvga", "vga"),               # resolución (cambiarla reinicia la cámara)
+    "q": (40, 60, 80),                   # calidad JPEG
+    "model": ("personas", "caras"),      # personas = modelo propio de cabezas
+    "pthr": (0.3, 0.4, 0.5, 0.65),       # sensibilidad del modelo propio
+    "mrg": (0.0, 1.5, 2.5, 4.0),         # unir detecciones cercanas
+    "night": (0, 1),                     # modo noche
+    "rot": (0, 1),                       # cámara girada 180°
+    "det": (0, 1),                       # detección en la cámara
+    "cap": (0, 2, 5, 10),                # foto de entrenamiento cada N s (0 = no)
+}
+
+
+def _respuesta(d, estado, n, conteo, ajustes_ver_camara=-1, **extra):
     # Ritmo de envío: rápido mientras haya (o pueda haber) pasajeros.
     rapido = estado != "LIBRE" or n > 0 or conteo > 0
-    return {"modo": "rapido" if rapido else "lento", "intervalo_ms": 1000 if rapido else 5000,
-            "pasajeros": n, "estado": estado,
-            "firmware": firmware_mas_nuevo()[0] or "", **extra}  # la cámara se actualiza si no es la suya
+    r = {"modo": "rapido" if rapido else "lento", "intervalo_ms": 1000 if rapido else 5000,
+         "pasajeros": n, "estado": estado,
+         "firmware": firmware_mas_nuevo()[0] or "", **extra}  # la cámara se actualiza si no es la suya
+    # Ajustes elegidos en el panel que la cámara todavía no tiene (-1 = firmware viejo).
+    ajustes = json.loads(d.get("ajustes") or "{}")
+    if ajustes and ajustes_ver_camara >= 0 and ajustes_ver_camara != (d.get("ajustes_ver") or 0):
+        r["ajustes_ver"] = d["ajustes_ver"]
+        r["ajustes_q"] = "&".join(f"{k}={v}" for k, v in ajustes.items())
+    return r
 
 
 @app.post("/api/v1/foto")
 async def foto(request: Request,
                x_dispositivo: str = Header(...), authorization: str = Header(None),
                x_ts: float = Header(0), x_conteo: int = Header(0), x_cola: int = Header(0),
-               x_temp: float = Header(None), x_rssi: int = Header(None), x_fw: str = Header(None)):
+               x_temp: float = Header(None), x_rssi: int = Header(None), x_fw: str = Header(None),
+               x_cfg: str = Header(None), x_ajustes_ver: int = Header(-1), x_ip: str = Header(None)):
     d = dispositivo_auth(x_dispositivo, authorization)
     if not d["aprobado"]:
         return JSONResponse({"error": "pendiente de aprobación", "intervalo_ms": 30000}, 403)
@@ -337,15 +363,17 @@ async def foto(request: Request,
         raise HTTPException(400, "Se espera una foto JPEG")
     # YOLO tarda ~0,1–0,3 s: en otro hilo, para no frenar al resto de cámaras.
     rel, n, estado = await run_in_threadpool(procesar_foto, d, datos, x_ts, x_conteo)
-    _actualizar_dispositivo(d, rel, n, x_conteo, estado, 1, x_cola, x_fw, x_rssi, x_temp)
-    return _respuesta(estado, n, x_conteo)
+    _actualizar_dispositivo(d, rel, n, x_conteo, estado, 1, x_cola, x_fw, x_rssi, x_temp,
+                            x_cfg, x_ajustes_ver if x_ajustes_ver >= 0 else None, x_ip)
+    return _respuesta(d, estado, n, x_conteo, x_ajustes_ver)
 
 
 @app.post("/api/v1/lote")
 async def lote(request: Request,
                x_dispositivo: str = Header(...), authorization: str = Header(None),
                x_cola: int = Header(0), x_temp: float = Header(None), x_rssi: int = Header(None),
-               x_fw: str = Header(None)):
+               x_fw: str = Header(None), x_cfg: str = Header(None), x_ajustes_ver: int = Header(-1),
+               x_ip: str = Header(None)):
     """Varias fotos guardadas sin internet en un solo envío, de la más vieja a la
     más nueva. Cada una: hora en ms (uint64), conteo de la cámara (int32), largo
     (uint32), todo little-endian, y luego el JPEG."""
@@ -368,8 +396,9 @@ async def lote(request: Request,
         raise HTTPException(400, "Lote vacío o dañado")
     for ts, conteo, jpg in fotos:
         rel, n, estado = await run_in_threadpool(procesar_foto, d, jpg, ts, conteo)
-    _actualizar_dispositivo(d, rel, n, conteo, estado, len(fotos), x_cola, x_fw, x_rssi, x_temp)
-    return _respuesta(estado, n, conteo, recibidas=len(fotos))
+    _actualizar_dispositivo(d, rel, n, conteo, estado, len(fotos), x_cola, x_fw, x_rssi, x_temp,
+                            x_cfg, x_ajustes_ver if x_ajustes_ver >= 0 else None, x_ip)
+    return _respuesta(d, estado, n, conteo, x_ajustes_ver, recibidas=len(fotos))
 
 def _version(v):
     """'1.10' > '1.9': compara versiones número por número."""
@@ -422,6 +451,13 @@ def _info_taxi(d):
     d.pop("token_hash", None)
     d["en_linea"] = bool(d["visto"] and ahora - d["visto"] < 30)
     d["jaula"] = json.loads(d["jaula"] or "[]")
+    d["ajustes"] = json.loads(d.get("ajustes") or "{}")
+    try:
+        d["cfg_camara"] = json.loads(d.get("cfg_camara") or "{}")
+    except ValueError:
+        d["cfg_camara"] = {}
+    # ¿La cámara ya aplicó los últimos ajustes elegidos en el panel?
+    d["ajustes_pendientes"] = bool(d["ajustes"]) and (d.get("ajustes_aplicados") or 0) != (d.get("ajustes_ver") or 0)
     d["carreras_hoy"] = db("SELECT COUNT(*) AS n FROM carreras WHERE dispositivo = ? AND inicio >= ? AND valida = 1",
                            (d["id"], hoy), one=True)["n"]
     with _carreras_lock:
@@ -521,6 +557,88 @@ def carreras_del_dia(disp: str, dia: str):
         "mas_larga_s": max((c["duracion"] for c in validas), default=0)}}
 
 
+def _resumen_carreras(carreras):
+    validas = [c for c in carreras if c["valida"]]
+    return {"carreras": len(validas), "descartadas": len(carreras) - len(validas),
+            "tiempo_s": sum(c["duracion"] for c in validas),
+            "pasajeros": sum(c.get("pasajeros") or c["max_pax"] for c in validas)}
+
+
+def reconstruir_dia(disp, dia, jaula):
+    """Vuelve a contar las fotos guardadas de un día con otra jaula (sin volver a
+    pasar YOLO: cada foto guarda dónde vio a cada persona) y rearma las carreras.
+    Devuelve (carreras, cambios, fotos con su conteo nuevo, estado final)."""
+    carpeta = _carpeta_taxi(disp) / dia
+    car = Carrera()
+    carreras, cambios, fotos = [], [], []
+    for j in sorted(carpeta.glob("*.json"), key=lambda f: float(f.stem)) if carpeta.exists() else []:
+        try:
+            info = json.loads(j.read_text())
+        except (OSError, ValueError):
+            continue
+        dets = [d[:5] + [int(dentro_de_jaula((d[0] + d[2]) / 2, (d[1] + d[3]) / 2, jaula))]
+                for d in info.get("dets", [])]
+        n = sum(d[5] for d in dets)
+        rel = f"{disp}/{dia}/{j.stem}.jpg"
+        if n != info.get("n", 0):
+            cambios.append({"foto": rel, "ts": info["ts"], "antes": info.get("n", 0), "despues": n, "dets": dets})
+        fotos.append((j, info, dets, n))
+        cerrada = car.actualizar(info["ts"], n, (info["ts"], rel))
+        if cerrada:
+            carreras.append(cerrada)
+    return carreras, cambios, fotos, car
+
+
+@app.post("/api/panel/taxi/{disp}/reanalizar", dependencies=[Depends(panel_auth)])
+async def reanalizar(disp: str, request: Request):
+    """{"dia": "AAAA-MM-DD", "jaula": [[x, y], ...] (opcional: la guardada), "aplicar": false}
+    Sin aplicar, solo muestra qué cambiaría. Con aplicar=true reemplaza el conteo
+    de las fotos y las carreras de ese día."""
+    body = await request.json()
+    d = db("SELECT * FROM dispositivos WHERE id = ?", (disp,), one=True)
+    if not d:
+        raise HTTPException(404)
+    dia = str(body.get("dia", ""))
+    try:
+        ini = datetime.strptime(dia, "%Y-%m-%d").timestamp()
+    except ValueError:
+        raise HTTPException(400, "Día inválido (AAAA-MM-DD)")
+    jaula = body.get("jaula")
+    jaula = json.loads(d["jaula"] or "[]") if jaula is None else [[float(x), float(y)] for x, y in jaula]
+
+    carreras, cambios, fotos, car = await run_in_threadpool(reconstruir_dia, disp, dia, jaula)
+    antes = db("SELECT * FROM carreras WHERE dispositivo = ? AND inicio >= ? AND inicio < ?", (disp, ini, ini + 86400))
+    if body.get("aplicar"):
+        def aplicar():
+            for j, info, dets, n in fotos:
+                if n != info.get("n") or dets != info.get("dets"):
+                    info["dets"], info["n"] = dets, n
+                    j.write_text(json.dumps(info))
+            db("DELETE FROM carreras WHERE dispositivo = ? AND inicio >= ? AND inicio < ?", (disp, ini, ini + 86400))
+            for c in carreras:
+                guardar_carrera(disp, c)
+            if dia == datetime.now().strftime("%Y-%m-%d"):
+                with _carreras_lock:
+                    _carreras[disp] = car  # la carrera en curso sigue con el conteo nuevo
+        await run_in_threadpool(aplicar)
+    return {"antes": _resumen_carreras(antes), "despues": _resumen_carreras(carreras),
+            "fotos": len(fotos), "cambios": len(cambios),
+            "quitadas": sum(1 for c in cambios if c["despues"] < c["antes"]),
+            "agregadas": sum(1 for c in cambios if c["despues"] > c["antes"]),
+            "ejemplos": cambios[:60], "aplicado": bool(body.get("aplicar")),
+            "carreras": [{k: c[k] for k in ("inicio", "fin", "duracion", "max_pax", "pasajeros", "valida")}
+                         for c in carreras]}
+
+
+@app.get("/api/panel/taxi/{disp}/foto_info", dependencies=[Depends(panel_auth)])
+def foto_info(disp: str, foto: str):
+    """Dónde vio a cada persona el servidor en una foto (para dibujar la jaula encima)."""
+    p = (FOTOS / foto).with_suffix(".json")
+    if not foto.startswith(disp + "/") or ".." in foto or not p.exists():
+        raise HTTPException(404)
+    return json.loads(p.read_text())
+
+
 @app.post("/api/panel/taxi/{disp}", dependencies=[Depends(panel_auth)])
 async def editar_taxi(disp: str, request: Request):
     body = await request.json()
@@ -530,6 +648,20 @@ async def editar_taxi(disp: str, request: Request):
         db("UPDATE dispositivos SET nombre = ? WHERE id = ?", (str(body["nombre"])[:60], disp))
     if "aprobado" in body:
         db("UPDATE dispositivos SET aprobado = ? WHERE id = ?", (int(bool(body["aprobado"])), disp))
+    if "ajustes" in body:
+        # Solo valores conocidos: se mandan tal cual a la cámara.
+        nuevos = {}
+        for k, v in dict(body["ajustes"]).items():
+            validos = AJUSTES_CAMARA.get(k)
+            if validos is None:
+                raise HTTPException(400, f"Ajuste desconocido: {k}")
+            v = type(validos[0])(v)
+            if v not in validos:
+                raise HTTPException(400, f"Valor inválido para {k}: {v}")
+            nuevos[k] = v
+        actual = json.loads(db("SELECT ajustes FROM dispositivos WHERE id = ?", (disp,), one=True)["ajustes"] or "{}")
+        actual.update(nuevos)
+        db("UPDATE dispositivos SET ajustes = ?, ajustes_ver = ajustes_ver + 1 WHERE id = ?", (json.dumps(actual), disp))
     if "jaula" in body:
         jaula = [[min(1, max(0, float(x))), min(1, max(0, float(y)))] for x, y in body["jaula"]][:20]
         db("UPDATE dispositivos SET jaula = ? WHERE id = ?", (json.dumps(jaula), disp))

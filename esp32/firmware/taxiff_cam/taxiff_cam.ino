@@ -148,10 +148,13 @@ void removeFilesIn(const char *dirPath);
 // (TX-XXXXXX, de la MAC) y el token que el servidor le da al registrarse.
 // Sin internet, las fotos se guardan en /q y se suben después, las más viejas
 // primero.
-const char *FW_VERSION = "3.2";
+const char *FW_VERSION = "3.3";
 char devId[12];
 String srvUrl, devToken;
 char srvState[64] = "sin servidor configurado";
+uint32_t ajustesVer = 0;  // versión de los ajustes del panel que ya se aplicaron
+String cfgJson();
+void applySettings(const char *q);
 volatile uint32_t srvInterval = 5000, sentOk = 0, sentErr = 0, lastSentMs = 0;
 // Cola numerada: las fotos [qHead, qTail) esperan envío. Cada una va en
 // /q/<seq/4096>/<seq%4096>.JPG (nombres cortos 8.3 y carpetas de 4096 para
@@ -531,12 +534,12 @@ String cfgJson() {
          ",\"cap\":" + String(capEvery) + "}";
 }
 
-// /set?fs=qvga|vga|svga&scale=0.2&thr=0.1&q=60&night=1
-esp_err_t handleSet(httpd_req_t *req) {
-  char q[400] = {0}, v[16], sv[300];
-  if (httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK) {
-    // srv=<dirección del servidor> (vacía = no enviar).
-    if (httpd_query_key_value(q, "srv", sv, sizeof sv) == ESP_OK) setServer(urlDecode(String(sv)));
+// Aplica ajustes en formato "clave=valor&clave=valor" (fs, q, pthr, mrg, night,
+// rot, model, det, cap, scale, thr). Los usa la página de la cámara (/set) y el
+// servidor, que manda los ajustes elegidos en el panel junto con su respuesta.
+void applySettings(const char *q) {
+  char v[16];
+  {
     if (httpd_query_key_value(q, "fs", v, sizeof v) == ESP_OK) {
       // 800x600 en RGB565 cuelga la cámara: el máximo es 640x480.
       int fs = !strcmp(v, "qvga") ? FRAMESIZE_QVGA : FRAMESIZE_VGA;
@@ -568,9 +571,8 @@ esp_err_t handleSet(httpd_req_t *req) {
       rot180 = atoi(v) != 0;
       prefs.putBool("rot", rot180);
     }
-    // cap=N: guarda una foto cada N segundos (0 = no); capnow=1: una ahora.
+    // cap=N: guarda una foto de entrenamiento cada N segundos (0 = no).
     if (httpd_query_key_value(q, "cap", v, sizeof v) == ESP_OK) capEvery = constrain(atoi(v), 0, 600);
-    if (httpd_query_key_value(q, "capnow", v, sizeof v) == ESP_OK) capNow = true;
     if (httpd_query_key_value(q, "mrg", v, sizeof v) == ESP_OK) {
       mergeCells = constrain(atof(v), 0, 6);
       prefs.putFloat("mrg", mergeCells);
@@ -584,6 +586,17 @@ esp_err_t handleSet(httpd_req_t *req) {
       prefs.putBool("night", night);
     }
     reconfig = true;
+  }
+}
+
+// /set?fs=qvga&q=60&night=1… (ver applySettings); además srv=<servidor> y capnow=1.
+esp_err_t handleSet(httpd_req_t *req) {
+  char q[400] = {0}, v[16], sv[300];
+  if (httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK) {
+    // srv=<dirección del servidor> (vacía = no enviar).
+    if (httpd_query_key_value(q, "srv", sv, sizeof sv) == ESP_OK) setServer(urlDecode(String(sv)));
+    if (httpd_query_key_value(q, "capnow", v, sizeof v) == ESP_OK) capNow = true;  // una foto de entrenamiento ya
+    applySettings(q);
   }
   String j = cfgJson();
   httpd_resp_set_type(req, "application/json");
@@ -752,6 +765,11 @@ int srvPost(const char *path, const char *ctype, const uint8_t *buf, size_t len,
   http.addHeader("X-Temp", String(temp, 1));
   http.addHeader("X-Rssi", String(WiFi.RSSI()));
   http.addHeader("X-Fw", FW_VERSION);
+  // Ajustes actuales, versión de los ajustes del panel ya aplicados e IP local:
+  // el panel los muestra y sabe si tiene que mandar ajustes nuevos.
+  http.addHeader("X-Cfg", cfgJson());
+  http.addHeader("X-Ajustes-Ver", String(ajustesVer));
+  http.addHeader("X-Ip", WiFi.localIP().toString());
   int code = http.POST((uint8_t *)buf, len);
   body = code > 0 ? http.getString() : "";
   http.end();
@@ -768,6 +786,16 @@ bool handleReply(int code, const String &body, uint32_t count) {
     if (f >= 0) {
       String latest = body.substring(f + 12, body.indexOf('"', f + 12));
       if (latest.length() && latest != FW_VERSION) otaHint = true;
+    }
+    // Ajustes nuevos elegidos en el panel del servidor: se aplican y se anota la versión.
+    int a = body.indexOf("\"ajustes_q\":\"");
+    long ver = jsonNumber(body, "ajustes_ver", -1);
+    if (a >= 0 && ver >= 0 && (uint32_t)ver != ajustesVer) {
+      String q = body.substring(a + 13, body.indexOf('"', a + 13));
+      Serial.printf("# ajustes del servidor v%ld: %s\n", ver, q.c_str());
+      ajustesVer = ver;
+      prefs.putUInt("ajv", ajustesVer);  // antes de aplicar: si cambia la resolución, la placa se reinicia
+      applySettings(q.c_str());
     }
     sentOk += count;
     lastSentMs = millis();
@@ -1148,6 +1176,7 @@ void startUploader() {
   snprintf(devId, sizeof devId, "TX-%02X%02X%02X", (uint8_t)(mac >> 24), (uint8_t)(mac >> 32), (uint8_t)(mac >> 40));
   srvUrl = prefs.getString("srv", "");
   devToken = prefs.getString("tok", "");
+  ajustesVer = prefs.getUInt("ajv", 0);
   if (srvUrl.length()) snprintf(srvState, sizeof srvState, "conectando…");
   if (storeOk()) queueInit();
   Serial.printf("# camara %s · servidor: %s · %u fotos en cola\n", devId,

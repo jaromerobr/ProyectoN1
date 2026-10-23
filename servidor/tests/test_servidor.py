@@ -262,6 +262,57 @@ def test_carreras_del_dia_y_fotos_de_una_carrera(srv):
     assert 85 <= len(fotos) <= 92 and all(c["inicio"] <= f["ts"] <= c["fin"] + 0.01 for f in fotos)
 
 
+def test_reanalizar_dia_con_jaula_quita_falsos_positivos(srv):
+    """Una persona fuera de la cabina (en la ventana) hacía una carrera falsa:
+    con la jaula nueva, la vista previa lo muestra y al aplicar desaparece."""
+    _, cli, personas = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}"}
+    t0 = __import__("time").time() - 7200
+    personas.append([0.85, 0.2, 0.95, 0.4, 0.8])  # a la derecha: la ventana
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 0) for i in range(60)]))
+    personas.clear()
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 0) for i in range(60, 80)]))
+    dia = __import__("datetime").datetime.fromtimestamp(t0).strftime("%Y-%m-%d")
+    assert cli.get(f"/api/panel/taxi/TX-000001/carreras?dia={dia}", headers=PANEL).json()["resumen"]["carreras"] == 1
+
+    jaula = [[0, 0], [0.7, 0], [0.7, 1], [0, 1]]  # la cabina, sin la ventana
+    previa = cli.post("/api/panel/taxi/TX-000001/reanalizar", headers=PANEL, json={"dia": dia, "jaula": jaula}).json()
+    assert previa["antes"]["carreras"] == 1 and previa["despues"]["carreras"] == 0
+    assert previa["quitadas"] == 60 and not previa["aplicado"]
+    assert cli.get(f"/api/panel/taxi/TX-000001/carreras?dia={dia}", headers=PANEL).json()["resumen"]["carreras"] == 1
+
+    cli.post("/api/panel/taxi/TX-000001/reanalizar", headers=PANEL, json={"dia": dia, "jaula": jaula, "aplicar": True})
+    assert cli.get(f"/api/panel/taxi/TX-000001/carreras?dia={dia}", headers=PANEL).json()["resumen"]["carreras"] == 0
+    fotos = cli.get(f"/api/panel/taxi/TX-000001/fotos?dia={dia}&solo_pasajeros=true", headers=PANEL).json()
+    assert fotos == []
+    info = cli.get(f"/api/panel/taxi/TX-000001/foto_info?foto=TX-000001/{dia}/{t0:.3f}.jpg", headers=PANEL)
+    assert info.status_code == 200 and info.json()["dets"][0][5] == 0
+
+
+def test_ajustes_desde_el_panel_llegan_a_la_camara(srv):
+    _, cli, _ = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}", "X-Ajustes-Ver": "0",
+         "X-Cfg": '{"fs":"vga","q":80}', "X-Ip": "192.168.1.61"}
+    # Sin ajustes elegidos no se manda nada.
+    assert "ajustes_q" not in cli.post("/api/v1/foto", content=JPEG, headers=h).json()
+    assert cli.post("/api/panel/taxi/TX-000001", headers=PANEL, json={"ajustes": {"q": 99}}).status_code == 400
+    assert cli.post("/api/panel/taxi/TX-000001", headers=PANEL, json={"ajustes": {"wifi": "x"}}).status_code == 400
+    cli.post("/api/panel/taxi/TX-000001", headers=PANEL, json={"ajustes": {"fs": "qvga", "q": 60, "night": 1}})
+    t = cli.get("/api/panel/taxi/TX-000001", headers=PANEL).json()
+    assert t["ajustes_pendientes"] and t["ip_local"] == "192.168.1.61" and t["cfg_camara"]["fs"] == "vga"
+    r = cli.post("/api/v1/foto", content=JPEG, headers=h).json()
+    assert r["ajustes_ver"] == 1 and set(r["ajustes_q"].split("&")) == {"fs=qvga", "q=60", "night=1"}
+    # La cámara los aplicó: ya no se reenvían y el panel deja de mostrarlos pendientes.
+    h["X-Ajustes-Ver"] = "1"
+    assert "ajustes_q" not in cli.post("/api/v1/foto", content=JPEG, headers=h).json()
+    assert not cli.get("/api/panel/taxi/TX-000001", headers=PANEL).json()["ajustes_pendientes"]
+    # Firmware viejo (no manda X-Ajustes-Ver): no se le mandan ajustes.
+    del h["X-Ajustes-Ver"]
+    assert "ajustes_q" not in cli.post("/api/v1/foto", content=JPEG, headers=h).json()
+
+
 def test_lote_danado_se_rechaza(srv):
     _, cli, _ = srv
     tok = registrar(cli)

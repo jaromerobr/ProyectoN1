@@ -57,6 +57,17 @@ main > * { min-width: 0; }  /* que una tabla ancha no estire la página en el te
 .visor .flecha { font-size: 30px; padding: 6px 16px; }
 .visor .cerrar { position: absolute; top: 16px; right: 16px; }
 .galeria .foto { cursor: pointer; }
+.galeria .foto canvas { width: 100%; aspect-ratio: 4/3; display: block; background: #000; }
+
+.form-ajustes { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; margin: 12px 0; }
+.form-ajustes select { width: 100%; margin-top: 6px; }
+
+/* Editor de jaula */
+.lienzo { touch-action: none; user-select: none; }
+.comparar { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+.comparar div { background: var(--bg); border-radius: 14px; padding: 10px 12px; }
+.comparar b { display: block; margin-top: 4px; }
+.ok { color: var(--ok); font-weight: 700; }
 @media (max-width: 600px) { .visor .flecha { position: absolute; bottom: 20px; } .visor .izq { left: 20px; } .visor .der { right: 20px; } }
 aside { display: grid; gap: 14px; }
 .card { background: var(--card); border-radius: 22px; padding: 16px; min-width: 0; overflow-x: auto; }
