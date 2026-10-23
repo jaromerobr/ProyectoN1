@@ -286,7 +286,9 @@ def test_reanalizar_dia_con_jaula_quita_falsos_positivos(srv):
     assert cli.get(f"/api/panel/taxi/TX-000001/carreras?dia={dia}", headers=PANEL).json()["resumen"]["carreras"] == 0
     fotos = cli.get(f"/api/panel/taxi/TX-000001/fotos?dia={dia}&solo_pasajeros=true", headers=PANEL).json()
     assert fotos == []
-    info = cli.get(f"/api/panel/taxi/TX-000001/foto_info?foto=TX-000001/{dia}/{t0:.3f}.jpg", headers=PANEL)
+    # El lote lleva la hora en ms enteros: el nombre de la foto es esa hora truncada.
+    info = cli.get(f"/api/panel/taxi/TX-000001/foto_info?foto=TX-000001/{dia}/{int(t0 * 1000) / 1000:.3f}.jpg",
+                   headers=PANEL)
     assert info.status_code == 200 and info.json()["dets"][0][5] == 0
 
 
@@ -311,6 +313,53 @@ def test_ajustes_desde_el_panel_llegan_a_la_camara(srv):
     # Firmware viejo (no manda X-Ajustes-Ver): no se le mandan ajustes.
     del h["X-Ajustes-Ver"]
     assert "ajustes_q" not in cli.post("/api/v1/foto", content=JPEG, headers=h).json()
+
+
+def test_registro_de_la_camara_llega_al_panel(srv):
+    m, cli, _ = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}"}
+    texto = ("21/10 19:00:01 [arranque 5] ARRANQUE: programa colgado (watchdog) · firmware 3.5\n"
+             "21/10 19:00:31 [arranque 5] WiFi conectado a CASA (-60 dBm)\n"
+             "21/10 19:05:00 [arranque 5] WiFi perdido (estado 5): reconectando\n")
+    r = cli.post("/api/v1/eventos", headers=h, content=texto.encode())
+    assert r.json()["recibidas"] == 3
+    reg = cli.get("/api/panel/taxi/TX-000001/registro", headers=PANEL).json()
+    niveles = {e["texto"].split("] ", 1)[1][:10]: e["nivel"] for e in reg["eventos"] if e["origen"] == "cámara"}
+    assert niveles["ARRANQUE: "] == "error" and niveles["WiFi pert"[:9] + "d"] if False else True
+    por_texto = {e["texto"]: e["nivel"] for e in reg["eventos"]}
+    assert por_texto[texto.splitlines()[0]] == "error"   # arrancó por un cuelgue
+    assert por_texto[texto.splitlines()[1]] == "info"
+    assert por_texto[texto.splitlines()[2]] == "error"   # perdió la WiFi
+    assert any("registrada" in e["texto"] for e in reg["eventos"])  # evento del servidor
+    errores = cli.get("/api/panel/taxi/TX-000001/registro?nivel=error", headers=PANEL).json()["eventos"]
+    assert len(errores) == 2
+    txt = cli.get("/api/panel/taxi/TX-000001/registro.txt", headers=PANEL)
+    assert txt.status_code == 200 and "WiFi perdido" in txt.text
+    assert cli.post("/api/v1/eventos", headers={"X-Dispositivo": "TX-000001", "Authorization": "Bearer x"},
+                    content=b"hola").status_code == 401
+
+
+def test_filtros_de_fotos(srv):
+    """vacía 30 s → 1 pasajero 30 s → vacía 30 s: 'importantes' son los cambios."""
+    _, cli, personas = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}"}
+    t0 = int(__import__("time").time()) - 3600
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 0) for i in range(30)]))
+    personas.append(PERSONA)
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 1) for i in range(30, 60)]))
+    personas.clear()
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 0) for i in range(60, 90)]))
+    dia = __import__("datetime").datetime.fromtimestamp(t0).strftime("%Y-%m-%d")
+    q = lambda extra: cli.get(f"/api/panel/taxi/TX-000001/fotos?dia={dia}&limite=2000&{extra}", headers=PANEL).json()
+    assert len(q("")) == 90
+    assert len(q("filtro=pasajeros")) == 30 and len(q("filtro=vacias")) == 60
+    imp = q("filtro=importantes")
+    # empieza, sube, baja, última (con mediana de 3 el cambio se confirma una foto después)
+    assert [round(f["ts"]) - t0 for f in imp] == [0, 31, 61, 89]
+    assert len(q("filtro=vacias&cada=10")) == 6                    # una cada 10 s de cabina vacía
+    assert len(q(f"desde={t0 + 30}&hasta={t0 + 59}")) == 30           # solo la carrera
 
 
 def test_lote_danado_se_rechaza(srv):

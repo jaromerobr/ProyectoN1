@@ -12,6 +12,8 @@ Arranque:  .venv\\Scripts\\python -m uvicorn app:app --host 0.0.0.0 --port 8000
 
 import hashlib
 import json
+import logging
+import logging.handlers
 import os
 import secrets
 import sqlite3
@@ -53,6 +55,21 @@ GUARDAR_FOTOS_H = int(os.environ.get("TAXIFF_GUARDAR_FOTOS_H", "72"))  # las que
 
 FOTOS.mkdir(parents=True, exist_ok=True)
 FIRMWARE.mkdir(parents=True, exist_ok=True)
+LOGS = DATOS / "logs"
+LOGS_CAMARAS = LOGS / "camaras"
+LOGS_CAMARAS.mkdir(parents=True, exist_ok=True)
+
+# Registro del servidor: datos/logs/servidor.log (rota a los 5 MB, guarda 10).
+# Ahí quedan cámaras que se registran, lotes recibidos, carreras, cambios en el
+# panel y errores. Los registros que mandan las cámaras van a datos/logs/camaras/.
+log = logging.getLogger("taxiff")
+if not log.handlers:
+    _h = logging.handlers.RotatingFileHandler(LOGS / "servidor.log", maxBytes=5_000_000, backupCount=10,
+                                              encoding="utf-8")
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", "%Y-%m-%d %H:%M:%S"))
+    log.addHandler(_h)
+    log.setLevel(logging.INFO)
+    logging.getLogger("uvicorn.error").addHandler(_h)  # arranques y errores del servidor web
 
 # ---------------------------------------------------------------- base de datos
 
@@ -71,6 +88,10 @@ with _db_lock:
         id INTEGER PRIMARY KEY AUTOINCREMENT, dispositivo TEXT, inicio REAL,
         fin REAL, duracion REAL, max_pax INTEGER, valida INTEGER, fotos TEXT);
     CREATE INDEX IF NOT EXISTS carreras_disp ON carreras(dispositivo, inicio);
+    CREATE TABLE IF NOT EXISTS eventos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, dispositivo TEXT, recibido REAL,
+        origen TEXT, nivel TEXT, texto TEXT);
+    CREATE INDEX IF NOT EXISTS eventos_disp ON eventos(dispositivo, id);
     """)
     # Columnas agregadas después (bases de datos ya creadas).
     for tabla, col in (("dispositivos", "cola INTEGER DEFAULT 0"),
@@ -95,6 +116,35 @@ def db(sql, args=(), one=False):
 
 def hash_token(t):
     return hashlib.sha256(t.encode()).hexdigest()
+
+
+_PALABRAS_ERROR = ("FALLO", "falló", "error", "no se pudo", "perdido", "colgado", "CORRIENTE",
+                   "caliente", "no revive", "dañad")
+_PALABRAS_AVISO = ("sin internet", "SIN WiFi", "pendiente", "reintent", "reconect", "llena", "reinici",
+                   "no responde", "WiFi caída")
+
+
+def nivel_de(texto):
+    """error / aviso / info según el contenido de la línea (para colorear y filtrar)."""
+    if any(p.lower() in texto.lower() for p in _PALABRAS_ERROR):
+        return "error"
+    if "ARRANQUE" in texto and not any(r in texto for r in ("encendido normal", "reinicio por software")):
+        return "error"  # arrancó por un fallo, un cuelgue o falta de corriente
+    if any(p.lower() in texto.lower() for p in _PALABRAS_AVISO) or "ARRANQUE" in texto:
+        return "aviso"
+    return "info"
+
+
+def evento(disp, texto, origen="servidor", nivel=None):
+    """Anota un evento de una cámara: en la base (para el panel), en
+    datos/logs/camaras/<id>.log (para revisar con un editor) y en servidor.log."""
+    nivel = nivel or nivel_de(texto)
+    ahora = time.time()
+    db("INSERT INTO eventos (dispositivo, recibido, origen, nivel, texto) VALUES (?, ?, ?, ?, ?)",
+       (disp, ahora, origen, nivel, texto[:500]))
+    with open(LOGS_CAMARAS / f"{disp}.log", "a", encoding="utf-8") as f:
+        f.write(f"{datetime.fromtimestamp(ahora):%Y-%m-%d %H:%M:%S} [{origen}] [{nivel}] {texto}\n")
+    getattr(log, {"error": "error", "aviso": "warning"}.get(nivel, "info"))(f"{disp} [{origen}] {texto}")
 
 # ---------------------------------------------------------------- detector
 
@@ -231,7 +281,15 @@ _carreras = {}
 _carreras_lock = threading.Lock()
 
 
-def guardar_carrera(disp, c):
+def guardar_carrera(disp, c, anotar=True):
+    if anotar:
+        evento(disp, f"carrera {'válida' if c['valida'] else 'descartada'}: "
+                     f"{datetime.fromtimestamp(c['inicio']):%d/%m %H:%M:%S} → {datetime.fromtimestamp(c['fin']):%H:%M:%S}, "
+                     f"{int(c['duracion'])} s, {c.get('pasajeros', c['max_pax'])} pasajero(s)", nivel="info")
+    _guardar_carrera(disp, c)
+
+
+def _guardar_carrera(disp, c):
     db("INSERT INTO carreras (dispositivo, inicio, fin, duracion, max_pax, pasajeros, eventos, valida, fotos) "
        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
        (disp, c["inicio"], c["fin"], c["duracion"], c["max_pax"], c.get("pasajeros", c["max_pax"]),
@@ -241,6 +299,16 @@ def guardar_carrera(disp, c):
 
 app = FastAPI(title="Taxiff")
 app.mount("/web", StaticFiles(directory=WEB), name="web")  # estilos y scripts del panel (sin datos)
+
+
+@app.exception_handler(Exception)
+async def error_inesperado(request: Request, exc: Exception):
+    """Cualquier error no previsto queda en servidor.log con todo el detalle."""
+    log.exception(f"error en {request.method} {request.url.path}")
+    return JSONResponse({"detail": "Error interno del servidor (ver datos/logs/servidor.log)"}, 500)
+
+
+log.info(f"servidor iniciado · datos en {DATOS} · modelo {MODELO.name}")
 _basic = HTTPBasic()
 
 
@@ -274,6 +342,7 @@ async def registro(request: Request):
     else:
         db("INSERT INTO dispositivos (id, token_hash, aprobado, creado, fw) VALUES (?, ?, ?, ?, ?)",
            (disp, hash_token(token), int(AUTO_APROBAR), time.time(), body.get("fw")))
+    evento(disp, f"cámara registrada (firmware {body.get('fw')})" + (" de nuevo" if d else ""), nivel="aviso")
     return {"token": token, "aprobado": bool(d["aprobado"]) if d else AUTO_APROBAR}
 
 
@@ -398,7 +467,22 @@ async def lote(request: Request,
         rel, n, estado = await run_in_threadpool(procesar_foto, d, jpg, ts, conteo)
     _actualizar_dispositivo(d, rel, n, conteo, estado, len(fotos), x_cola, x_fw, x_rssi, x_temp,
                             x_cfg, x_ajustes_ver if x_ajustes_ver >= 0 else None, x_ip)
+    log.info(f"{d['id']} lote de {len(fotos)} fotos guardadas sin internet (quedan {x_cola} en la cámara)")
     return _respuesta(d, estado, n, conteo, x_ajustes_ver, recibidas=len(fotos))
+
+@app.post("/api/v1/eventos")
+async def eventos_camara(request: Request, x_dispositivo: str = Header(...), authorization: str = Header(None)):
+    """La cámara manda las líneas nuevas de su registro (texto, una por línea).
+    Las que escribió sin internet llegan cuando vuelve a conectarse."""
+    d = dispositivo_auth(x_dispositivo, authorization)
+    datos = await request.body()
+    if len(datos) > 256_000:
+        raise HTTPException(413, "Registro demasiado grande")
+    lineas = [l.strip() for l in datos.decode("utf-8", "replace").splitlines() if l.strip()]
+    for l in lineas[:2000]:
+        evento(d["id"], l, origen="cámara")
+    return {"recibidas": len(lineas)}
+
 
 def _version(v):
     """'1.10' > '1.9': compara versiones número por número."""
@@ -503,9 +587,15 @@ def dias_con_fotos(disp: str):
 
 @app.get("/api/panel/taxi/{disp}/fotos", dependencies=[Depends(panel_auth)])
 def fotos_del_dia(disp: str, dia: str, solo_pasajeros: bool = False, limite: int = 400,
-                  desde: float = 0, hasta: float = 0):
+                  desde: float = 0, hasta: float = 0, filtro: str = "", cada: int = 0):
     """Fotos de un día en orden de hora, con lo que contó el servidor y la cámara.
-    `desde`/`hasta` (hora en segundos) limitan a un rango, p. ej. una carrera."""
+    - `desde`/`hasta` (hora en segundos): un rango, p. ej. una carrera.
+    - `filtro`: "" todas · "pasajeros" con alguien · "vacias" sin nadie (para
+      comprobar que de verdad no había nadie) · "importantes" solo donde cambió
+      el número de pasajeros (subió o bajó alguien), más la primera y la última.
+    - `cada` (segundos): como mucho una foto cada tanto (p. ej. 60 = una por minuto)."""
+    if solo_pasajeros:
+        filtro = "pasajeros"
     try:
         datetime.strptime(dia, "%Y-%m-%d")
     except ValueError:
@@ -513,7 +603,9 @@ def fotos_del_dia(disp: str, dia: str, solo_pasajeros: bool = False, limite: int
     carpeta = _carpeta_taxi(disp) / dia
     if not carpeta.exists():
         return []
-    out = []
+    # "Cambio" con el mismo suavizado que las carreras (mediana de las 3 últimas
+    # fotos): un parpadeo del detector en una sola foto no cuenta.
+    out, anterior, ultima_incluida, ultima_vista, ultimos = [], None, -1e12, None, deque(maxlen=3)
     for j in sorted(carpeta.glob("*.json"), key=lambda f: float(f.stem)):
         if float(j.stem) < desde:
             continue
@@ -523,14 +615,31 @@ def fotos_del_dia(disp: str, dia: str, solo_pasajeros: bool = False, limite: int
             info = json.loads(j.read_text())
         except (OSError, ValueError):
             continue
-        if solo_pasajeros and not info.get("n"):
-            continue
         if not j.with_suffix(".jpg").exists():
             continue
-        out.append({"foto": f"{disp}/{dia}/{j.stem}.jpg", "ts": info["ts"],
-                    "n": info.get("n", 0), "n_esp": info.get("n_esp", 0), "aprox": info.get("aprox", False)})
+        f = {"foto": f"{disp}/{dia}/{j.stem}.jpg", "ts": info["ts"], "n": info.get("n", 0),
+             "n_esp": info.get("n_esp", 0), "aprox": info.get("aprox", False)}
+        ultimos.append(f["n"])
+        suavizado = int(statistics.median(ultimos))
+        cambio = anterior is None or suavizado != anterior
+        anterior = suavizado
+        ultima_vista = f
+        if filtro == "pasajeros" and not f["n"]:
+            continue
+        if filtro == "vacias" and f["n"]:
+            continue
+        if filtro == "importantes" and not cambio:
+            continue
+        if cada and f["ts"] - ultima_incluida < cada and not (filtro == "importantes"):
+            continue
+        f["cambio"] = cambio
+        out.append(f)
+        ultima_incluida = f["ts"]
         if len(out) >= min(limite, 2000):
-            break
+            return out
+    # "importantes" termina con la última foto del rango (cómo quedó la cabina).
+    if filtro == "importantes" and ultima_vista and (not out or out[-1]["ts"] != ultima_vista["ts"]):
+        out.append({**ultima_vista, "cambio": False})
     return out
 
 
@@ -616,7 +725,9 @@ async def reanalizar(disp: str, request: Request):
                     j.write_text(json.dumps(info))
             db("DELETE FROM carreras WHERE dispositivo = ? AND inicio >= ? AND inicio < ?", (disp, ini, ini + 86400))
             for c in carreras:
-                guardar_carrera(disp, c)
+                guardar_carrera(disp, c, anotar=False)
+            evento(disp, f"día {dia} reanalizado con jaula de {len(jaula)} esquinas: {len(carreras)} carreras, "
+                         f"{len(cambios)} fotos cambiaron de conteo", nivel="aviso")
             if dia == datetime.now().strftime("%Y-%m-%d"):
                 with _carreras_lock:
                     _carreras[disp] = car  # la carrera en curso sigue con el conteo nuevo
@@ -628,6 +739,44 @@ async def reanalizar(disp: str, request: Request):
             "ejemplos": cambios[:60], "aplicado": bool(body.get("aplicar")),
             "carreras": [{k: c[k] for k in ("inicio", "fin", "duracion", "max_pax", "pasajeros", "valida")}
                          for c in carreras]}
+
+
+@app.get("/api/panel/taxi/{disp}/registro", dependencies=[Depends(panel_auth)])
+def registro_taxi(disp: str, limite: int = 500, nivel: str = "", buscar: str = "", antes_de: int = 0):
+    """Eventos de una cámara (lo que anotó ella y lo que anotó el servidor),
+    del más nuevo al más viejo. `antes_de` = id para pedir más viejos."""
+    sql, args = "SELECT * FROM eventos WHERE dispositivo = ?", [disp]
+    if nivel in ("error", "aviso", "info"):
+        sql += " AND nivel = ?"
+        args.append(nivel)
+    if buscar:
+        sql += " AND texto LIKE ?"
+        args.append(f"%{buscar}%")
+    if antes_de:
+        sql += " AND id < ?"
+        args.append(antes_de)
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(min(limite, 2000))
+    filas = db(sql, args)
+    resumen = {r["nivel"]: r["n"] for r in db(
+        "SELECT nivel, COUNT(*) AS n FROM eventos WHERE dispositivo = ? AND recibido > ? GROUP BY nivel",
+        (disp, time.time() - 86400))}
+    return {"eventos": filas, "ultimas_24h": resumen}
+
+
+@app.get("/api/panel/taxi/{disp}/registro.txt", dependencies=[Depends(panel_auth)])
+def registro_taxi_txt(disp: str):
+    """Registro completo de la cámara, para descargarlo."""
+    p = LOGS_CAMARAS / f"{disp}.log"
+    if not p.exists() or ".." in disp:
+        raise HTTPException(404)
+    return FileResponse(p, media_type="text/plain; charset=utf-8", filename=f"registro_{disp}.log")
+
+
+@app.get("/api/panel/servidor.log", dependencies=[Depends(panel_auth)])
+def registro_servidor():
+    """Registro del servidor (el archivo actual), para descargarlo."""
+    return FileResponse(LOGS / "servidor.log", media_type="text/plain; charset=utf-8", filename="servidor.log")
 
 
 @app.get("/api/panel/taxi/{disp}/foto_info", dependencies=[Depends(panel_auth)])
@@ -662,12 +811,15 @@ async def editar_taxi(disp: str, request: Request):
         actual = json.loads(db("SELECT ajustes FROM dispositivos WHERE id = ?", (disp,), one=True)["ajustes"] or "{}")
         actual.update(nuevos)
         db("UPDATE dispositivos SET ajustes = ?, ajustes_ver = ajustes_ver + 1 WHERE id = ?", (json.dumps(actual), disp))
+        evento(disp, f"ajustes enviados desde el panel: {nuevos}", nivel="info")
     if "jaula" in body:
         jaula = [[min(1, max(0, float(x))), min(1, max(0, float(y)))] for x, y in body["jaula"]][:20]
         db("UPDATE dispositivos SET jaula = ? WHERE id = ?", (json.dumps(jaula), disp))
+        evento(disp, f"jaula guardada: {len(jaula)} esquinas" if jaula else "jaula quitada (cuenta a todos)", nivel="info")
     if body.get("reiniciar_token"):
         # La cámara podrá registrarse de nuevo (p. ej. si se borró su memoria).
         db("UPDATE dispositivos SET token_hash = NULL WHERE id = ?", (disp,))
+        evento(disp, "se permitió que la cámara se registre de nuevo", nivel="aviso")
     return {"ok": True}
 
 
@@ -713,6 +865,7 @@ async def subir_firmware(request: Request, version: str):
     if len(datos) < 100_000 or datos[0] != 0xE9:  # 0xE9 = cabecera de imagen ESP32
         raise HTTPException(400, "No parece un firmware de ESP32")
     (FIRMWARE / f"taxiff_cam-{version}.bin").write_bytes(datos)
+    log.warning(f"firmware {version} publicado ({len(datos) // 1024} KB): las cámaras se actualizarán")
     return {"ok": True, "version": version}
 
 
@@ -752,6 +905,7 @@ def _mantenimiento():
                 if c.estado == "EN_CARRERA" and ahora - c.recibida > SIN_FOTOS_S and disp not in con_cola:
                     cerradas.append((disp, c.cerrar(c.ultima_con_gente or c.ultima_ts)))
         for disp, c in cerradas:
+            evento(disp, f"la cámara dejó de enviar {SIN_FOTOS_S // 60} min en plena carrera: se cerró sola", nivel="aviso")
             guardar_carrera(disp, c)
         if ahora - ultima_limpieza > 3600:
             ultima_limpieza = ahora
@@ -759,11 +913,17 @@ def _mantenimiento():
             for r in db("SELECT fotos FROM carreras"):
                 evidencia.update(json.loads(r["fotos"] or "[]"))
             limite = ahora - GUARDAR_FOTOS_H * 3600
+            borradas = 0
             for f in FOTOS.rglob("*.jpg"):
                 rel = f.relative_to(FOTOS).as_posix()
                 if rel not in evidencia and f.stat().st_mtime < limite:
                     f.unlink(missing_ok=True)
                     f.with_suffix(".json").unlink(missing_ok=True)
+                    borradas += 1
+            if borradas:
+                log.info(f"limpieza: {borradas} fotos de más de {GUARDAR_FOTOS_H} h que no eran evidencia")
+            # Los eventos en la base se guardan 90 días (los archivos .log quedan completos).
+            db("DELETE FROM eventos WHERE recibido < ?", (ahora - 90 * 86400,))
 
 
 threading.Thread(target=_mantenimiento, daemon=True).start()

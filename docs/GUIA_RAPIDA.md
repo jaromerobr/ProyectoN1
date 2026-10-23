@@ -145,6 +145,25 @@ Muestra lo que dice la cámara durante 30 s: conexión, fotos por segundo, tempe
 
 ---
 
+## 7b. Registros (para revisar fallos)
+
+Todo queda anotado con fecha y hora:
+
+| Qué | Dónde | Cómo verlo |
+|---|---|---|
+| Lo que le pasa a la cámara: arranques y su motivo, WiFi perdida o reconectada, servidor caído, ajustes, actualizaciones, reinicios de cámara, calor, memoria llena, y su estado cada minuto | En su tarjeta SD (`/registro.txt`). Cada minuto con internet se copia al servidor | Panel → taxi → pestaña **Registro**. Por cable: `camara.ps1 registro` |
+| Lo mismo, por cámara, en un archivo | `servidor\datos\logs\camaras\TX-XXXXXX.log` | Panel → Registro → "Descargar registro completo de la cámara", o abrirlo con el Bloc de notas |
+| Lo que hace el servidor: arranques, cámaras registradas, lotes recibidos, carreras, cambios en el panel, limpieza, errores | `servidor\datos\logs\servidor.log` (guarda los últimos 10 archivos de 5 MB) | Panel → Registro → "Descargar registro del servidor" |
+
+En la pestaña **Registro**:
+- Los **errores** salen en rojo y los **avisos** en naranja.
+- Arriba ves cuántos hubo en las últimas 24 horas.
+- Puedes filtrar por tipo o buscar una palabra (por ejemplo `ARRANQUE`, `WiFi`, `carrera`).
+
+Para reconocer un problema de corriente: si ves muchos `ARRANQUE: encendido normal` seguidos sin que tú la hayas desconectado, la cámara se está quedando sin corriente (cargador, cable o power bank).
+
+---
+
 ## 8. Problemas frecuentes
 
 | Problema | Qué hacer |
@@ -163,14 +182,18 @@ Muestra lo que dice la cámara durante 30 s: conexión, fotos por segundo, tempe
 
 ## 9. Guardar cambios en GitHub
 
-Git está instalado en versión portátil. Desde la carpeta del proyecto:
+Git está instalado en versión portátil. En la terminal de VS Code, desde la carpeta del proyecto:
 
 ```powershell
 cd "C:\Users\ASUS Vivobook\Desktop\taxiff"
 $git = "$env:LOCALAPPDATA\Programs\MinGit\cmd\git.exe"
-& $git add -A
+& $git status                          # qué cambió
+& $git add -A                          # preparar todos los cambios
 & $git commit -m "Describe aquí el cambio"
-& $git push
+& $git push                            # subir a GitHub
 ```
+
+- La primera vez se abre una ventana para iniciar sesión en GitHub. Después ya no la pide.
+- Para bajar los cambios en otra PC: `& $git pull`.
 
 Datos, fotos, videos, claves y el entorno de Python **no** se suben (están en `.gitignore`).

@@ -179,6 +179,14 @@ canvas { display: block; border-radius: 16px; background: #000; cursor: crosshai
 .visor .flecha { font-size: 26px; width: 48px; height: 48px; padding: 0; background: rgba(255,255,255,.12); color: #fff; }
 .visor .cerrar { position: absolute; top: 16px; right: 16px; background: rgba(255,255,255,.12); color: #fff; }
 
+/* Filtros y registro */
+.filtros select, .filtros input { max-width: 100%; }
+.registro { display: grid; gap: 2px; font-size: 13px; }
+.registro .linea { padding: 6px 10px; border-radius: 10px; border-left: 3px solid transparent; }
+.registro .linea.error { background: color-mix(in srgb, var(--bad) 10%, transparent); border-left-color: var(--bad); }
+.registro .linea.aviso { background: var(--warn-bg); border-left-color: var(--warn); }
+.registro .linea .m { margin-right: 6px; white-space: nowrap; }
+
 /* Ajustes y jaula */
 .form-ajustes { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 12px; margin: 12px 0; }
 .form-ajustes select { width: 100%; margin-top: 5px; }

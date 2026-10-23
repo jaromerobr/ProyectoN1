@@ -16,6 +16,7 @@
   <button data-tab="jaula">Jaula</button>
   <button data-tab="vivo">En vivo</button>
   <button data-tab="ajustes">Ajustes</button>
+  <button data-tab="registro">Registro</button>
 </nav>
 
 <main>
@@ -33,9 +34,21 @@
 
   <!-- ======================= FOTOS ======================= -->
   <section id="tab-fotos" class="tab" hidden>
-    <div class="fila barra">
-      <select id="diaFotos"></select>
-      <label class="m check"><input type="checkbox" id="soloPax">solo con pasajeros</label>
+    <div class="fila barra filtros">
+      <select id="diaFotos" title="Día"></select>
+      <select id="fCarrera" title="Carrera"><option value="">Todo el día</option></select>
+      <select id="fTipo" title="Qué fotos">
+        <option value="importantes">Importantes (sube o baja alguien)</option>
+        <option value="">Todas</option>
+        <option value="pasajeros">Con pasajeros</option>
+        <option value="vacias">Cabina vacía (para comprobar)</option>
+      </select>
+      <select id="fCada" title="Cuántas">
+        <option value="0">Todas las tomadas</option>
+        <option value="30">1 cada 30 s</option>
+        <option value="60">1 por minuto</option>
+        <option value="300">1 cada 5 min</option>
+      </select>
     </div>
     <p class="m" id="resumenFotos"></p>
     <div id="galeria" class="galeria"></div>
@@ -87,6 +100,23 @@
     </div>
   </section>
 
+  <!-- ======================= REGISTRO ======================= -->
+  <section id="tab-registro" class="tab" hidden>
+    <div class="card k resumen">
+      <div><b id="rgErrores" class="mal">0</b><span>errores (24 h)</span></div>
+      <div><b id="rgAvisos">0</b><span>avisos (24 h)</span></div>
+      <div><b id="rgInfo">0</b><span>informativos (24 h)</span></div>
+    </div>
+    <div class="fila barra filtros">
+      <select id="rgNivel"><option value="">Todo</option><option value="error">Solo errores</option><option value="aviso">Avisos</option><option value="info">Informativos</option></select>
+      <input id="rgBuscar" placeholder="Buscar (ej. WiFi, ARRANQUE, carrera)" style="max-width:300px;margin:0">
+      <a class="m" id="rgDescargar" target="_blank">Descargar registro completo de la cámara</a>
+      <a class="m" href="/api/panel/servidor.log" target="_blank">Descargar registro del servidor</a>
+    </div>
+    <div class="card"><div id="rgLista" class="registro"></div>
+      <button id="rgMas" class="fantasma" hidden>Ver más antiguos</button></div>
+  </section>
+
   <!-- ======================= AJUSTES ======================= -->
   <section id="tab-ajustes" class="tab dos" hidden>
     <div class="card">
@@ -136,7 +166,13 @@
     <p class="m">Pasajeros a lo largo de la carrera (toca el gráfico para ver la foto de ese momento):</p>
     <svg id="dGrafico" class="grafico" viewBox="0 0 1000 160" preserveAspectRatio="none"></svg>
     <div id="dEventos" class="eventos"></div>
-    <div class="fila"><b>Fotos de la carrera</b><label class="m check"><input type="checkbox" id="dSoloPax">solo con pasajeros</label></div>
+    <div class="fila"><b>Fotos de la carrera</b>
+      <select id="dTipo">
+        <option value="importantes">Importantes (sube o baja alguien)</option>
+        <option value="">Todas</option>
+        <option value="pasajeros">Con pasajeros</option>
+        <option value="vacias">Sin pasajeros</option>
+      </select></div>
     <div id="dGaleria" class="galeria"></div>
   </div>
 </div>
@@ -276,12 +312,18 @@ function masCercana(fotos, ts) {
   fotos.forEach((f, i) => { const d = Math.abs(f.ts - ts); if (d < dif) { dif = d; mejor = i; } });
   return mejor;
 }
+// Fotos donde cambia el número de pasajeros, más la primera y la última.
+function importantes(fotos) {
+  return fotos.filter((f, i) => i === 0 || i === fotos.length - 1 || f.n !== fotos[i - 1].n);
+}
 function pintarGaleriaDetalle() {
-  const lista = $('dSoloPax').checked ? detalleFotos.filter(f => f.n) : detalleFotos;
+  const t = $('dTipo').value;
+  const lista = t === 'importantes' ? importantes(detalleFotos)
+    : t === 'pasajeros' ? detalleFotos.filter(f => f.n) : t === 'vacias' ? detalleFotos.filter(f => !f.n) : detalleFotos;
   $('dGaleria').innerHTML = '';
   lista.slice(0, 400).forEach((f, i) => $('dGaleria').appendChild(miniatura(f, i, lista)));
 }
-$('dSoloPax').onchange = pintarGaleriaDetalle;
+$('dTipo').onchange = pintarGaleriaDetalle;
 $('dCerrar').onclick = () => $('detalle').hidden = true;
 
 // Gráfico escalonado de pasajeros por foto, con la carrera sombreada.
@@ -304,13 +346,28 @@ function dibujarGrafico(c, fotos) {
   };
 }
 
-// ---------------------------------------------------------------- fotos del día
-let ultimaFoto = 0, fotosDia = [];
+// ---------------------------------------------------------------- fotos del día (con filtros)
+let ultimaFoto = 0, fotosDia = [], carrerasFotos = [];
+const DESCRIPCION = {
+  importantes: 'solo donde sube o baja alguien (más la primera y la última)',
+  '': 'todas', pasajeros: 'con pasajeros', vacias: 'cabina vacía: revísalas para comprobar que de verdad no había nadie',
+};
+async function cargarCarrerasFotos() {
+  const dia = $('diaFotos').value;
+  carrerasFotos = dia ? (await api(`/api/panel/taxi/${id}/carreras?dia=${dia}`)).carreras : [];
+  $('fCarrera').innerHTML = '<option value="">Todo el día</option>' + carrerasFotos.map((c, i) =>
+    `<option value="${i}">Carrera ${horaCorta(c.inicio)}–${horaCorta(c.fin)} · ${c.pasajeros} pax${c.valida ? '' : ' (descartada)'}</option>`).join('');
+}
+let pedidoFotos = 0;  // si cambian los filtros rápido, solo vale la última respuesta
 async function cargarFotos(mas) {
+  const mio = ++pedidoFotos;
   const dia = $('diaFotos').value;
   if (!dia) { $('galeria').innerHTML = ''; $('resumenFotos').textContent = 'Todavía no hay fotos.'; return; }
-  const q = `dia=${dia}&solo_pasajeros=${$('soloPax').checked}&limite=200&desde=${mas ? ultimaFoto + 0.0005 : 0}`;
+  const c = carrerasFotos[$('fCarrera').value];
+  const desde = mas ? ultimaFoto + 0.0005 : (c ? c.inicio - 10 : 0);
+  const q = `dia=${dia}&filtro=${$('fTipo').value}&cada=${$('fCada').value}&limite=200&desde=${desde}` + (c ? `&hasta=${c.fin + 10}` : '');
   const fotos = await api(`/api/panel/taxi/${id}/fotos?${q}`);
+  if (mio !== pedidoFotos) return;
   if (!mas) { $('galeria').innerHTML = ''; fotosDia = []; }
   const base = fotosDia.length;
   fotosDia = fotosDia.concat(fotos);
@@ -318,11 +375,11 @@ async function cargarFotos(mas) {
   if (fotos.length) ultimaFoto = fotos[fotos.length - 1].ts;
   $('masFotos').hidden = fotos.length < 200;
   $('resumenFotos').textContent = fotosDia.length
-    ? `${fotosDia.length} fotos · toca una para verla grande · borde verde = con pasajeros · ≈ = hora aproximada`
+    ? `${fotosDia.length} fotos · ${DESCRIPCION[$('fTipo').value]} · toca una para verla grande · borde verde = con pasajeros · ≈ = hora aproximada`
     : 'No hay fotos para este filtro.';
 }
-$('diaFotos').onchange = () => cargarFotos(false);
-$('soloPax').onchange = () => cargarFotos(false);
+$('diaFotos').onchange = async () => { await cargarCarrerasFotos(); cargarFotos(false); };
+for (const s of ['fCarrera', 'fTipo', 'fCada']) $(s).onchange = () => cargarFotos(false);
 $('masFotos').onclick = () => cargarFotos(true);
 
 // ---------------------------------------------------------------- dibujo de foto + jaula + personas
@@ -542,6 +599,34 @@ $('guardarAjustes').onclick = async () => {
   await cargar();
 };
 
+// ---------------------------------------------------------------- registro de eventos
+let rgUltimoId = 0;
+const ORIGEN = { 'cámara': '📷', servidor: '🖥' };
+async function cargarRegistro(mas) {
+  const q = new URLSearchParams({ limite: 300, nivel: $('rgNivel').value, buscar: $('rgBuscar').value.trim() });
+  if (mas) q.set('antes_de', rgUltimoId);
+  const r = await api(`/api/panel/taxi/${id}/registro?${q}`);
+  $('rgErrores').textContent = r.ultimas_24h.error || 0;
+  $('rgAvisos').textContent = r.ultimas_24h.aviso || 0;
+  $('rgInfo').textContent = r.ultimas_24h.info || 0;
+  if (!mas) $('rgLista').innerHTML = '';
+  for (const e of r.eventos) {
+    const div = document.createElement('div');
+    div.className = 'linea ' + e.nivel;
+    div.innerHTML = `<span class="m">${new Date(e.recibido * 1000).toLocaleString('es-ES')} ${ORIGEN[e.origen] || ''}</span> ${esc(e.texto)}`;
+    $('rgLista').appendChild(div);
+  }
+  if (r.eventos.length) rgUltimoId = r.eventos[r.eventos.length - 1].id;
+  $('rgMas').hidden = r.eventos.length < 300;
+  if (!$('rgLista').children.length) $('rgLista').innerHTML = '<p class="m">Sin eventos para este filtro.</p>';
+}
+$('rgNivel').onchange = () => cargarRegistro(false);
+let rgEspera;
+$('rgBuscar').oninput = () => { clearTimeout(rgEspera); rgEspera = setTimeout(() => cargarRegistro(false), 300); };
+$('rgMas').onclick = () => cargarRegistro(true);
+$('rgDescargar').href = `/api/panel/taxi/${id}/registro.txt`;
+document.querySelector('[data-tab="registro"]').addEventListener('click', () => cargarRegistro(false));
+
 // ---------------------------------------------------------------- estado del taxi
 async function cargar() {
   try {
@@ -563,7 +648,7 @@ async function cargar() {
   } catch (e) { $('pie').textContent = 'Sin conexión con el servidor'; }
 }
 
-cargarDias().then(() => { cargarCarreras(); cargarFotos(false); });
+cargarDias().then(async () => { cargarCarreras(); await cargarCarrerasFotos(); cargarFotos(false); });
 cargar();
 setInterval(cargar, 2000);
 // Las carreras se refrescan solas mientras miras el día de hoy.

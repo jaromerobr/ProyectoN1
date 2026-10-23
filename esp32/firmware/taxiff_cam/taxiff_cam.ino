@@ -149,7 +149,7 @@ void logEvent(const char *fmt, ...);
 // (TX-XXXXXX, de la MAC) y el token que el servidor le da al registrarse.
 // Sin internet, las fotos se guardan en /q y se suben después, las más viejas
 // primero.
-const char *FW_VERSION = "3.4";
+const char *FW_VERSION = "3.5";
 char devId[12];
 String srvUrl, devToken;
 char srvState[64] = "sin servidor configurado";
@@ -666,6 +666,7 @@ void capturePhoto(camera_fb_t *fb) {
   if (!storeOk() || freeKB < capMinFreeKB()) {
     capEvery = 0;
     Serial.println("# memoria de fotos llena: captura detenida");
+    logEvent("memoria llena: se detuvo la captura de fotos de entrenamiento");
     return;
   }
   uint8_t *jpg = nullptr;
@@ -733,6 +734,7 @@ void registerDevice() {
     prefs.putString("tok", devToken);
     snprintf(srvState, sizeof srvState, "registrada");
     Serial.printf("# registrada en el servidor como %s\n", devId);
+    logEvent("registrada en el servidor como %s", devId);
   } else if (code == 409) {
     snprintf(srvState, sizeof srvState, "ya registrada: permite registrarla de nuevo en el panel");
   } else {
@@ -780,6 +782,16 @@ int srvPost(const char *path, const char *ctype, const uint8_t *buf, size_t len,
 // Interpreta la respuesta del servidor. true si se recibió (o si la cámara
 // está pendiente de aprobar: no tiene sentido guardar esas fotos).
 bool handleReply(int code, const String &body, uint32_t count) {
+  // En el registro solo se anotan los cambios (se cayó / volvió), no cada envío.
+  static int prevOk = -1;
+  if ((code == 200) != (prevOk == 1)) {
+    if (code == 200) {
+      if (prevOk == 0) logEvent("servidor responde de nuevo");
+    } else {
+      logEvent("servidor no responde (código %d): las fotos se guardan y se suben después", code);
+    }
+    prevOk = code == 200;
+  }
   if (code == 200) {
     srvInterval = constrain(jsonNumber(body, "intervalo_ms", 5000), 500, 60000);
     // El servidor avisa cuál es el firmware más nuevo: si no es este, se revisa ya.
@@ -794,6 +806,7 @@ bool handleReply(int code, const String &body, uint32_t count) {
     if (a >= 0 && ver >= 0 && (uint32_t)ver != ajustesVer) {
       String q = body.substring(a + 13, body.indexOf('"', a + 13));
       Serial.printf("# ajustes del servidor v%ld: %s\n", ver, q.c_str());
+      logEvent("ajustes recibidos del panel (v%ld): %s", ver, q.c_str());
       ajustesVer = ver;
       prefs.putUInt("ajv", ajustesVer);  // antes de aplicar: si cambia la resolución, la placa se reinicia
       applySettings(q.c_str());
@@ -888,6 +901,38 @@ void logEvent(const char *fmt, ...) {
   }
   f.printf("%s [arranque %u] %s\n", ts, (unsigned)bootN, msg);
   f.close();
+  // Copia pendiente de enviar al servidor (sendLogs la sube cuando hay internet).
+  File p = store->open("/registro.pend", "a");
+  if (p) {
+    if (p.size() < 200 * 1024) p.printf("%s [arranque %u] %s\n", ts, (unsigned)bootN, msg);
+    p.close();
+  }
+}
+
+// Sube al servidor las líneas del registro que aún no envió. Se renombran
+// antes de enviar para que lo que se anote mientras tanto vaya a otro archivo.
+bool sendLogs() {
+  if (!storeOk()) return true;
+  if (!store->exists("/registro.env")) {
+    if (!store->exists("/registro.pend")) return true;
+    store->rename("/registro.pend", "/registro.env");
+  }
+  File f = store->open("/registro.env", "r");
+  if (!f) return true;
+  size_t len = f.size();
+  uint8_t *buf = len ? (uint8_t *)ps_malloc(len) : nullptr;
+  if (!buf) {
+    f.close();
+    store->remove("/registro.env");
+    return true;
+  }
+  f.read(buf, len);
+  f.close();
+  String body;
+  int code = srvPost("/api/v1/eventos", "text/plain; charset=utf-8", buf, len, queueSize(), body);
+  free(buf);
+  if (code == 200) store->remove("/registro.env");
+  return code == 200;
 }
 
 // Muestra por el puerto serie el final del registro (comando LOG).
@@ -939,10 +984,13 @@ bool readQueued(uint32_t seq, uint8_t *&buf, size_t &len, uint64_t &tsMs, int &n
 void enqueuePhoto(const uint8_t *buf, size_t len, uint64_t tsMs, int n) {
   if (!storeOk()) return;
   // Memoria casi llena: se descartan las fotos más viejas de la cola.
+  uint32_t dropped = 0;
   while (freeKB < queueMinFreeKB() && qHead < qTail) {
     queueDropHead();
     freeKB += len / 1024 + 1;
+    dropped++;
   }
+  if (dropped) logEvent("memoria llena: se descartaron %u fotos viejas sin enviar", (unsigned)dropped);
   String path = qPath(qTail);
   File f = store->open(path, "w");
   if (!f) {
@@ -1124,6 +1172,7 @@ const char *flashFromServer(const String &path) {
   }
   if (!Update.end(true)) return "el firmware llegó dañado";
   Serial.println("# firmware instalado: reiniciando");
+  logEvent("firmware nuevo instalado: reiniciando con él");
   delay(300);
   ESP.restart();
   return "";
@@ -1162,8 +1211,10 @@ void checkFirmware() {
   otaRequested = true;  // el bucle principal se pausa
   for (int k = 0; k < 50 && !camStopped; k++) vTaskDelay(pdMS_TO_TICKS(100));
   Serial.printf("# descargando firmware %s\n", version.c_str());
+  logEvent("instalando firmware %s (intento %u)", version.c_str(), (unsigned)tries + 1);
   const char *err = flashFromServer(path);
   // Solo se llega aquí si falló (si salió bien la placa ya se reinició).
+  logEvent("FALLÓ la actualización a %s: %s", version.c_str(), err);
   snprintf(srvState, sizeof srvState, "falló la actualización: %s", err);
   Serial.printf("# %s\n", srvState);
   otaRequested = false;  // el bucle principal sigue
@@ -1207,6 +1258,12 @@ void uploadTask(void *) {
         free(buf);
       }
       continue;
+    }
+    // El registro de eventos se sube cada minuto (lo anotado sin internet, al volver).
+    static uint32_t lastLogs = 0;
+    if (canSend && millis() - lastLogs > 60000) {
+      lastLogs = millis();
+      sendLogs();
     }
     // Entre foto y foto se va vaciando la cola, de a varias por envío. Si el
     // servidor no responde se reintenta en 15 s, sin frenar las fotos.
@@ -1540,6 +1597,7 @@ void loop() {
   static uint32_t lastT = 0;
   serialCommands();
   if (restartPending) {
+    logEvent("reinicio pedido (cambio de resolución)");
     delay(300);  // deja salir la respuesta de /set
     ESP.restart();
   }
@@ -1565,11 +1623,13 @@ void loop() {
     } else if (t - camFailSince > 3000) {
       if (++camReinitsInRow > 3) {
         Serial.println("# la camara no revive: reiniciando la placa");
+        logEvent("FALLO: la cámara no da imagen tras 3 reinicios: se reinicia la placa");
         delay(200);
         ESP.restart();
       }
       camReinits++;
       Serial.printf("# reiniciando la camara (%u)\n", camReinitsInRow);
+      logEvent("la cámara dejó de dar imagen: reiniciándola (%u)", (unsigned)camReinitsInRow);
       esp_camera_deinit();
       delay(200);
       bool ok = initCamera();
@@ -1647,8 +1707,8 @@ void housekeeping(uint32_t now) {
   if (now - lastTemp > 2000) {
     temp = temperatureRead();
     tempMax = max(tempMax, temp);
-    if (!hot && temp >= HOT_ON) hot = true;
-    if (hot && temp <= HOT_OFF) hot = false;
+    if (!hot && temp >= HOT_ON) { hot = true; logEvent("MUY caliente (%.0f C): baja el ritmo para enfriarse", temp); }
+    if (hot && temp <= HOT_OFF) { hot = false; logEvent("temperatura normal otra vez (%.0f C)", temp); }
     sendKBs = sentBytes / 1024.0f / ((now - lastTemp) / 1000.0f);
     sentBytes = 0;
     lastTemp = now;
