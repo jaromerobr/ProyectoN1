@@ -29,6 +29,12 @@ canvas { width: 100%; height: auto; border-radius: 14px; background: #000; displ
 table { width: 100%; border-collapse: collapse; }
 td { padding: 8px 6px; border-top: 1px solid var(--line); vertical-align: middle; }
 tr.descartada { opacity: .5; }
+.galeria { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 10px 0; }
+.galeria .foto { position: relative; display: block; border-radius: 10px; overflow: hidden; background: #000; outline: 2px solid transparent; }
+.galeria .foto.con { outline-color: var(--ok); }
+.galeria img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; }
+.galeria span { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px 6px; font-size: 12px; background: rgba(0,0,0,.65); }
+select { padding: 8px 10px; border-radius: 10px; border: 1px solid #3a3a40; background: #0f0f12; color: #fff; }
 img.mini { width: 64px; height: 48px; object-fit: cover; border-radius: 6px; margin-right: 4px; }
 button { background: var(--acc); color: #000; border: 0; border-radius: 999px; padding: 9px 16px; font-weight: 800; cursor: pointer; font-size: 14px; }
 button.fantasma { background: transparent; color: #f2f2f5; border: 1px solid #3a3a40; }

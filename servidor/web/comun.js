@@ -23,9 +23,19 @@ function filaCarreraTitulo(conTaxi) {
   return `<tr class="m"><td>Inicio</td>${conTaxi ? '<td>Taxi</td>' : ''}<td>Duración</td><td>Pasajeros</td><td>Evidencia</td></tr>`;
 }
 
+// Línea de tiempo de una carrera: "14:05:10 suben 2 · 14:20:31 baja 1 · …".
+function lineaDeTiempo(eventos) {
+  return (eventos || []).map(([ts, tipo, k]) =>
+    `${new Date(ts * 1000).toLocaleTimeString()} ${tipo === 'sube' ? (k > 1 ? 'suben ' : 'sube ') : (k > 1 ? 'bajan ' : 'baja ')}${k}`).join(' · ');
+}
+
 function filaCarrera(c, conTaxi) {
   const fotos = c.fotos.slice(0, 4).map(f => `<a href="/fotos/${f}" target="_blank"><img class="mini" src="/fotos/${f}" alt=""></a>`).join('');
-  return `<tr class="${c.valida ? '' : 'descartada'}"><td>${new Date(c.inicio * 1000).toLocaleString()}</td>` +
+  const distintos = c.pasajeros ?? c.max_pax;
+  const pax = `<b>${distintos}</b>${distintos !== c.max_pax ? ` <span class="m">(máx. ${c.max_pax} a la vez)</span>` : ''}`;
+  const linea = lineaDeTiempo(c.eventos);
+  return `<tr class="${c.valida ? '' : 'descartada'}"><td>${new Date(c.inicio * 1000).toLocaleString()}` +
+    (linea ? `<div class="m">${linea}</div>` : '') + `</td>` +
     (conTaxi ? `<td><a href="/taxi/${c.dispositivo}">${esc(c.nombre || c.dispositivo)}</a></td>` : '') +
-    `<td>${dur(c.duracion)}${c.valida ? '' : ' <span class="m">(descartada: menos de 30 s)</span>'}</td><td>${c.max_pax}</td><td>${fotos}</td></tr>`;
+    `<td>${dur(c.duracion)}${c.valida ? '' : ' <span class="m">(descartada: menos de 30 s)</span>'}</td><td>${pax}</td><td>${fotos}</td></tr>`;
 }

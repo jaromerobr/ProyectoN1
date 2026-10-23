@@ -22,6 +22,17 @@
       </div>
       <p class="m" id="ayudaJaula" hidden>Toca la imagen para marcar las esquinas de la cabina (al menos 3). Solo se cuentan las personas dentro.</p>
     </div>
+    <div class="card" style="margin-top:14px">
+      <div class="fila"><b>Fotos</b>
+        <div class="fila">
+          <select id="dia"></select>
+          <label class="m"><input type="checkbox" id="soloPax" style="width:auto;margin:0 4px 0 0">solo con pasajeros</label>
+        </div>
+      </div>
+      <p class="m" id="resumenFotos"></p>
+      <div id="galeria" class="galeria"></div>
+      <button id="masFotos" class="fantasma" hidden>Ver más</button>
+    </div>
   </section>
   <aside>
     <div class="card k">
@@ -120,6 +131,36 @@ async function cargar() {
     $('carreras').innerHTML = filaCarreraTitulo(false) + datos.carreras.map(c => filaCarrera(c, false)).join('');
   } catch (e) { $('pie').textContent = 'Sin conexión con el servidor'; }
 }
+// Galería: fotos del día elegido, en orden de hora, con lo que contó el servidor.
+let ultimaFoto = 0;
+async function cargarDias() {
+  const dias = await api(`/api/panel/taxi/${id}/dias`);
+  const actual = $('dia').value;
+  $('dia').innerHTML = dias.map(d => `<option>${d}</option>`).join('') || '<option value="">sin fotos</option>';
+  if (actual && dias.includes(actual)) $('dia').value = actual;
+}
+const hora = ts => new Date(ts * 1000).toLocaleTimeString();
+function tarjeta(f) {
+  return `<a href="/fotos/${f.foto}" target="_blank" class="foto${f.n ? ' con' : ''}">
+    <img src="/fotos/${f.foto}" loading="lazy" alt="">
+    <span>${hora(f.ts)}${f.aprox ? ' ≈' : ''} · ${f.n} pax</span></a>`;
+}
+async function cargarFotos(mas) {
+  if (!$('dia').value) { $('galeria').innerHTML = ''; return; }
+  const q = `dia=${$('dia').value}&solo_pasajeros=${$('soloPax').checked}&limite=200&desde=${mas ? ultimaFoto + 0.0005 : 0}`;
+  const fotos = await api(`/api/panel/taxi/${id}/fotos?${q}`);
+  if (!mas) $('galeria').innerHTML = '';
+  $('galeria').insertAdjacentHTML('beforeend', fotos.map(tarjeta).join(''));
+  if (fotos.length) ultimaFoto = fotos[fotos.length - 1].ts;
+  $('masFotos').hidden = fotos.length < 200;
+  const total = $('galeria').children.length;
+  $('resumenFotos').textContent = total ? `${total} fotos mostradas · ≈ = hora aproximada (la cámara arrancó sin internet)` : 'No hay fotos para este filtro.';
+}
+$('dia').onchange = () => cargarFotos(false);
+$('soloPax').onchange = () => cargarFotos(false);
+$('masFotos').onclick = () => cargarFotos(true);
+cargarDias().then(() => cargarFotos(false));
+
 cargar(); setInterval(() => { if (!editando) cargar(); }, 1500);
 </script>
 </body>

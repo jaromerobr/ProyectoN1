@@ -109,6 +109,50 @@ def test_bajada_breve_no_corta_la_carrera(srv):
     assert c.estado == "EN_CARRERA" and c.max == 2
 
 
+def test_pasajeros_distintos_y_linea_de_tiempo(srv):
+    """Suben 2, baja 1, sube otro: fueron 3 pasajeros distintos (máx. 2 a la vez)."""
+    m, _, _ = srv
+    c = m.Carrera()
+    t, conteos = 0, [2] * 60 + [1] * 60 + [2] * 60 + [0] * 15
+    cerradas = []
+    for n in conteos:
+        cerradas.append(c.actualizar(t, n, (t, "f")))
+        t += 1
+    hecha = [x for x in cerradas if x][0]
+    assert hecha["pasajeros"] == 3 and hecha["max_pax"] == 2
+    assert [e[1] for e in hecha["eventos"]] == ["sube", "baja", "sube", "baja"]
+    assert hecha["eventos"][-1][2] == 2  # al final bajan los 2 que quedaban
+
+
+def test_un_cuadro_raro_no_cuenta_como_subida(srv):
+    m, _, _ = srv
+    c = m.Carrera()
+    conteos = [1] * 30 + [2, 1, 1] + [1] * 30 + [0] * 15  # un falso positivo de 1 foto
+    cerradas = [c.actualizar(i, n, (i, "f")) for i, n in enumerate(conteos)]
+    assert [x for x in cerradas if x][0]["pasajeros"] == 1
+
+
+def test_foto_vieja_fuera_de_orden_no_cambia_la_carrera(srv):
+    m, _, _ = srv
+    c = m.Carrera()
+    for i in range(100, 120):
+        c.actualizar(i, 1, (i, "f"))
+    assert c.estado == "EN_CARRERA"
+    assert c.actualizar(50, 0, (50, "f")) is None  # foto de antes
+    assert c.estado == "EN_CARRERA" and c.ultima_ts == 119
+
+
+def test_hueco_largo_cierra_donde_se_vio_gente(srv):
+    m, _, _ = srv
+    c = m.Carrera()
+    for i in range(0, 120):
+        c.actualizar(i, 1, (i, "f"))
+    # la cámara se apagó 2 horas con el pasajero: no se estira la carrera
+    cerrada = c.actualizar(119 + 7200, 1, (119 + 7200, "f"))
+    assert cerrada and cerrada["fin"] == 119 and cerrada["valida"] == 1
+    assert c.estado == "CONFIRMANDO"  # y la foto nueva empieza otra posible carrera
+
+
 # ------------------------------------------------------------------ API cámara
 
 def test_registro_unico(srv):
@@ -173,6 +217,47 @@ def test_reiniciar_token_permite_registrarse_otra_vez(srv):
     registrar(cli)
     cli.post("/api/panel/taxi/TX-000001", headers=PANEL, json={"reiniciar_token": True})
     registrar(cli)
+
+
+def lote_bytes(fotos):
+    import struct
+    return b"".join(struct.pack("<QiI", int(ts * 1000), n, len(JPEG)) + JPEG for ts, n in fotos)
+
+
+def test_lote_de_una_semana_sin_internet(srv):
+    """Fotos guardadas hace días llegan juntas y la carrera queda con su hora real."""
+    _, cli, personas = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}", "X-Cola": "0"}
+    hace_5_dias = __import__("time").time() - 5 * 86400
+    personas.append(PERSONA)
+    r = cli.post("/api/v1/lote", headers=h, content=lote_bytes([(hace_5_dias + i, 1) for i in range(60)]))
+    assert r.status_code == 200 and r.json()["recibidas"] == 60
+    personas.clear()
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(hace_5_dias + i, 0) for i in range(60, 80)]))
+    carreras = cli.get("/api/panel/carreras", headers=PANEL).json()
+    assert len(carreras) == 1
+    assert abs(carreras[0]["inicio"] - hace_5_dias) < 2 and 55 <= carreras[0]["duracion"] <= 62
+    dia = __import__("datetime").datetime.fromtimestamp(hace_5_dias).strftime("%Y-%m-%d")
+    assert dia in cli.get("/api/panel/taxi/TX-000001/dias", headers=PANEL).json()
+    fotos = cli.get(f"/api/panel/taxi/TX-000001/fotos?dia={dia}&solo_pasajeros=true", headers=PANEL).json()
+    assert len(fotos) == 60 and not fotos[0]["aprox"]
+
+
+def test_lote_danado_se_rechaza(srv):
+    _, cli, _ = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}"}
+    assert cli.post("/api/v1/lote", headers=h, content=lote_bytes([(1, 0)])[:-5]).status_code == 400
+
+
+def test_foto_sin_hora_queda_aproximada(srv):
+    _, cli, _ = srv
+    tok = registrar(cli)
+    enviar(cli, tok, 0)
+    dia = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
+    fotos = cli.get(f"/api/panel/taxi/TX-000001/fotos?dia={dia}", headers=PANEL).json()
+    assert fotos and fotos[0]["aprox"]
 
 
 # ------------------------------------------------------------------ panel

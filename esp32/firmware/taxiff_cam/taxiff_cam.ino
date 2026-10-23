@@ -148,7 +148,7 @@ void removeFilesIn(const char *dirPath);
 // (TX-XXXXXX, de la MAC) y el token que el servidor le da al registrarse.
 // Sin internet, las fotos se guardan en /q y se suben después, las más viejas
 // primero.
-const char *FW_VERSION = "2.9";
+const char *FW_VERSION = "3.2";
 char devId[12];
 String srvUrl, devToken;
 char srvState[64] = "sin servidor configurado";
@@ -726,24 +726,41 @@ void registerDevice() {
   }
 }
 
-// Envía una foto. Devuelve true si el servidor la recibió (o no la quiere:
-// cámara pendiente de aprobar), false si hay que guardarla para después.
-bool postPhoto(const uint8_t *buf, size_t len, uint32_t ts, int n) {
+// Hora actual en ms desde 1970, o 0 si la cámara aún no la sabe (arrancó sin
+// internet y todavía no la tomó del servidor de hora).
+uint64_t nowMs() {
+  if (!nowEpoch()) return 0;
+  struct timeval tv;
+  gettimeofday(&tv, nullptr);
+  return (uint64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+// Envía `buf` al servidor con los datos de la cámara en las cabeceras.
+int srvPost(const char *path, const char *ctype, const uint8_t *buf, size_t len, uint32_t cola,
+            String &body, const char *tsHeader = nullptr, int n = -1) {
   HTTPClient http;
   WiFiClientSecure sec;
   WiFiClient plain;
-  if (!srvBegin(http, sec, plain, "/api/v1/foto")) return false;
-  http.addHeader("Content-Type", "image/jpeg");
+  if (!srvBegin(http, sec, plain, path)) return -1;
+  http.setTimeout(20000);
+  http.addHeader("Content-Type", ctype);
   http.addHeader("X-Dispositivo", devId);
   http.addHeader("Authorization", "Bearer " + devToken);
-  http.addHeader("X-Ts", String(ts));
-  http.addHeader("X-Conteo", String(n));
+  if (tsHeader) http.addHeader("X-Ts", tsHeader);
+  if (n >= 0) http.addHeader("X-Conteo", String(n));
+  http.addHeader("X-Cola", String(cola));  // fotos que aún esperan: el servidor no cierra la carrera
   http.addHeader("X-Temp", String(temp, 1));
   http.addHeader("X-Rssi", String(WiFi.RSSI()));
   http.addHeader("X-Fw", FW_VERSION);
   int code = http.POST((uint8_t *)buf, len);
-  String body = code > 0 ? http.getString() : "";
+  body = code > 0 ? http.getString() : "";
   http.end();
+  return code;
+}
+
+// Interpreta la respuesta del servidor. true si se recibió (o si la cámara
+// está pendiente de aprobar: no tiene sentido guardar esas fotos).
+bool handleReply(int code, const String &body, uint32_t count) {
   if (code == 200) {
     srvInterval = constrain(jsonNumber(body, "intervalo_ms", 5000), 500, 60000);
     // El servidor avisa cuál es el firmware más nuevo: si no es este, se revisa ya.
@@ -752,7 +769,7 @@ bool postPhoto(const uint8_t *buf, size_t len, uint32_t ts, int n) {
       String latest = body.substring(f + 12, body.indexOf('"', f + 12));
       if (latest.length() && latest != FW_VERSION) otaHint = true;
     }
-    sentOk++;
+    sentOk += count;
     lastSentMs = millis();
     snprintf(srvState, sizeof srvState, "conectada");
     return true;
@@ -769,6 +786,14 @@ bool postPhoto(const uint8_t *buf, size_t len, uint32_t ts, int n) {
   sentErr++;
   snprintf(srvState, sizeof srvState, code > 0 ? "error del servidor (%d)" : "sin internet (%d)", code);
   return false;
+}
+
+// Envía una foto en vivo. false si hay que guardarla para después.
+bool postPhoto(const uint8_t *buf, size_t len, uint64_t tsMs, int n) {
+  String body;
+  String ts = String((double)tsMs / 1000.0, 3);  // 0 = sin hora: el servidor usa la de llegada
+  int code = srvPost("/api/v1/foto", "image/jpeg", buf, len, queueSize(), body, ts.c_str(), n);
+  return handleReply(code, body, 1);
 }
 
 String qDir(uint32_t seq) {
@@ -791,9 +816,54 @@ void queueDropHead() {
   if ((qHead & 0xFFF) == 0 || qHead == qTail) store->rmdir(qDir(qHead - 1));
 }
 
-// Guarda una foto en la cola. Cada archivo lleva delante 8 bytes con la hora
-// de la foto y lo que contó la cámara.
-void enqueuePhoto(const uint8_t *buf, size_t len, uint32_t ts, int n) {
+// Cabecera de cada foto en la cola. Si la cámara no sabía la hora al tomarla
+// (arrancó sin internet), se guarda el momento en millis() y el número de
+// arranque: si más tarde, sin reiniciarse, consigue la hora, la calcula hacia atrás.
+struct QHdr {
+  uint32_t magic;  // QMAGIC (las versiones anteriores guardaban solo hora y conteo, 8 bytes)
+  uint32_t boot;   // número de arranque
+  uint64_t tsMs;   // hora en ms desde 1970 (0 = no se sabía)
+  uint32_t ms;     // millis() al tomarla
+  int32_t n;       // pasajeros que contó la cámara
+};
+const uint32_t QMAGIC = 0x32515854;  // "TXQ2"
+uint32_t bootN = 0;
+
+// Lee la foto `seq` de la cola (buf queda en PSRAM: liberarlo con free).
+bool readQueued(uint32_t seq, uint8_t *&buf, size_t &len, uint64_t &tsMs, int &n) {
+  buf = nullptr;
+  File f = store->open(qPath(seq), "r");
+  if (!f) return false;
+  size_t total = f.size();
+  QHdr h = {};
+  size_t hdr = sizeof h;
+  if (total < 8 || f.read((uint8_t *)&h, min(total, sizeof h)) < 8) { f.close(); return false; }
+  if (h.magic != QMAGIC) {  // formato anterior: [hora en s][conteo]
+    uint32_t *old = (uint32_t *)&h;
+    tsMs = (uint64_t)old[0] * 1000;
+    n = (int32_t)old[1];
+    hdr = 8;
+  } else {
+    tsMs = h.tsMs;
+    n = h.n;
+    if (!tsMs && h.boot == bootN && nowMs()) tsMs = nowMs() - (millis() - h.ms);
+  }
+  if (total <= hdr + 2) { f.close(); return false; }
+  len = total - hdr;
+  buf = (uint8_t *)ps_malloc(len);
+  if (buf) {
+    f.seek(hdr);
+    if (f.read(buf, len) != len || buf[0] != 0xFF || buf[1] != 0xD8) {
+      free(buf);
+      buf = nullptr;
+    }
+  }
+  f.close();
+  return buf != nullptr;
+}
+
+// Guarda una foto en la cola, con su cabecera QHdr delante.
+void enqueuePhoto(const uint8_t *buf, size_t len, uint64_t tsMs, int n) {
   if (!storeOk()) return;
   // Memoria casi llena: se descartan las fotos más viejas de la cola.
   while (freeKB < queueMinFreeKB() && qHead < qTail) {
@@ -807,40 +877,77 @@ void enqueuePhoto(const uint8_t *buf, size_t len, uint32_t ts, int n) {
     f = store->open(path, "w");
   }
   if (!f) return;
-  uint32_t hdr[2] = {ts, (uint32_t)n};
-  f.write((const uint8_t *)hdr, sizeof hdr);
+  QHdr h = {QMAGIC, bootN, tsMs, millis(), n};
+  f.write((const uint8_t *)&h, sizeof h);
   f.write(buf, len);
   f.close();
   qTail++;
   freeKB -= min<uint32_t>((uint32_t)freeKB, (uint32_t)(len / 1024 + 1));
 }
 
-// Sube la foto más vieja de la cola. false si no se pudo (sin internet).
+// Sube la foto más vieja de la cola, sola. false si no se pudo (sin internet).
 bool sendOldestQueued() {
   while (qHead < qTail) {
-    File f = store->open(qPath(qHead), "r");
-    size_t total = f ? f.size() : 0;
-    if (total <= 8) {  // falta o quedó a medias (corte de luz): se salta
-      if (f) f.close();
+    uint8_t *buf;
+    size_t len;
+    uint64_t tsMs;
+    int n;
+    if (!readQueued(qHead, buf, len, tsMs, n)) {  // falta o quedó a medias (corte de luz)
       queueDropHead();
       continue;
     }
-    uint32_t hdr[2];
-    f.read((uint8_t *)hdr, sizeof hdr);
-    size_t len = total - sizeof hdr;
-    uint8_t *buf = (uint8_t *)ps_malloc(len);
-    if (!buf) {
-      f.close();
-      return false;
-    }
-    f.read(buf, len);
-    f.close();
-    bool ok = postPhoto(buf, len, hdr[0], (int)hdr[1]);
+    bool ok = postPhoto(buf, len, tsMs, n);
     free(buf);
     if (ok) queueDropHead();
     return ok;
   }
   return true;
+}
+
+// Sube varias fotos de la cola en un solo envío (mucho más rápido que una por
+// una con días de fotos guardadas). Formato por foto: hora en ms (8 bytes),
+// conteo (4), largo (4) y el JPEG. false si no se pudo (sin internet).
+// Tamaño del lote: se adapta a la conexión. Si un envío se corta (WiFi débil,
+// hotspot lento) el siguiente es la mitad; si sale bien, vuelve a crecer.
+const size_t BATCH_MAX = 300 * 1024, BATCH_MIN = 16 * 1024;
+size_t batchBytes = 64 * 1024;
+
+bool sendBatch() {
+  const size_t MAX_BYTES = batchBytes;
+  const int MAX_FOTOS = 20;
+  uint8_t *out = (uint8_t *)ps_malloc(MAX_BYTES + 64 * 1024);
+  if (!out) return false;
+  size_t used = 0;
+  int k = 0;
+  while (qHead + k < qTail && k < MAX_FOTOS) {
+    uint8_t *buf;
+    size_t len;
+    uint64_t tsMs;
+    int n;
+    if (!readQueued(qHead + k, buf, len, tsMs, n)) {
+      if (k == 0) { queueDropHead(); continue; }  // dañada al principio: se descarta
+      break;                                       // en medio: se manda lo que hay
+    }
+    if (k > 0 && used + 16 + len > MAX_BYTES) { free(buf); break; }
+    uint32_t len32 = len;
+    memcpy(out + used, &tsMs, 8);
+    memcpy(out + used + 8, &n, 4);
+    memcpy(out + used + 12, &len32, 4);
+    memcpy(out + used + 16, buf, len);
+    used += 16 + len;
+    free(buf);
+    k++;
+  }
+  if (!k) { free(out); return true; }
+  String body;
+  int code = srvPost("/api/v1/lote", "application/octet-stream", out, used, queueSize() - k, body);
+  free(out);
+  if (code == 404) return sendOldestQueued();  // servidor viejo sin envío por lotes
+  if (code == 200) batchBytes = min(batchBytes * 2, BATCH_MAX);
+  else if (code < 0) batchBytes = max(batchBytes / 2, BATCH_MIN);  // se cortó: lotes más chicos
+  bool ok = handleReply(code, body, k);
+  if (ok && code == 200) for (int i = 0; i < k; i++) queueDropHead();
+  return ok && code == 200;
 }
 
 // Al arrancar: busca dónde empieza y termina la cola que quedó guardada.
@@ -991,20 +1098,20 @@ void checkFirmware() {
 
 // Tarea aparte (núcleo 0) para que enviar no frene la cámara ni la detección.
 void uploadTask(void *) {
-  uint32_t lastLive = 0, lastOta = millis() - OTA_CHECK_MS + 60000;
+  // Las fotos se toman SIEMPRE (con o sin internet o servidor): si no se pueden
+  // enviar quedan guardadas con su hora y se suben después, en orden.
+  uint32_t lastLive = 0, lastReg = 0, retryAt = 0, lastOta = millis() - OTA_CHECK_MS + 60000;
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(100));
-    if (!srvUrl.length() || apMode) continue;
-    bool online = WiFi.status() == WL_CONNECTED;
-    if (online && !devToken.length()) {
+    bool online = !apMode && WiFi.status() == WL_CONNECTED && srvUrl.length();
+    if (online && !devToken.length() && millis() - lastReg > 10000) {
+      lastReg = millis();
       registerDevice();
-      vTaskDelay(pdMS_TO_TICKS(devToken.length() ? 100 : 10000));
-      continue;
     }
+    bool canSend = online && devToken.length();
     // Revisión cada hora, o antes si el servidor avisó (como mucho cada 10 min,
     // para no reintentar sin parar si una actualización falla).
-    if (online && devToken.length() &&
-        (millis() - lastOta >= OTA_CHECK_MS || (otaHint && millis() - lastOta >= 600000))) {
+    if (canSend && (millis() - lastOta >= OTA_CHECK_MS || (otaHint && millis() - lastOta >= 600000))) {
       lastOta = millis();
       otaHint = false;
       checkFirmware();
@@ -1020,15 +1127,18 @@ void uploadTask(void *) {
       int n = paxNow;
       xSemaphoreGive(lock);
       if (buf) {
-        uint32_t ts = (uint32_t)nowEpoch();  // 0 = sin hora: el servidor usa la de llegada
-        if (!online || !devToken.length() || !postPhoto(buf, len, ts, n)) enqueuePhoto(buf, len, ts, n);
+        uint64_t ts = nowMs();
+        // Si hay fotos esperando, la nueva va detrás de ellas: así el servidor
+        // las recibe siempre en el orden en que se tomaron.
+        if (!canSend || queueSize() > 0 || !postPhoto(buf, len, ts, n)) enqueuePhoto(buf, len, ts, n);
         free(buf);
       }
       continue;
     }
-    // Entre fotos en vivo se va vaciando la cola.
-    if (online && devToken.length() && queueSize() > 0 && !sendOldestQueued()) {
-      vTaskDelay(pdMS_TO_TICKS(3000));
+    // Entre foto y foto se va vaciando la cola, de a varias por envío. Si el
+    // servidor no responde se reintenta en 15 s, sin frenar las fotos.
+    if (canSend && queueSize() > 0 && (int32_t)(millis() - retryAt) >= 0 && !sendBatch()) {
+      retryAt = millis() + 15000;
     }
   }
 }
@@ -1148,6 +1258,8 @@ void setup() {
   prefs.begin("taxiff", false);
   String key = String("rst") + (int)esp_reset_reason();
   prefs.putUInt(key.c_str(), prefs.getUInt(key.c_str(), 0) + 1);
+  bootN = prefs.getUInt("bootn", 0) + 1;  // para corregir la hora de fotos tomadas sin internet
+  prefs.putUInt("bootn", bootN);
   bootHistory = "";
   for (int r = 0; r <= 15; r++) {
     uint32_t n = prefs.getUInt((String("rst") + r).c_str(), 0);
