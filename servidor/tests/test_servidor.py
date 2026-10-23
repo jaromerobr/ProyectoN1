@@ -73,7 +73,7 @@ def test_carrera_completa_y_valida(srv):
     for i in range(5, 65):
         cerradas.append(c.actualizar(t + i, 1, (t + i, "f")))
     assert c.estado == "EN_CARRERA"
-    for i in range(65, 80):
+    for i in range(65, 95):
         cerradas.append(c.actualizar(t + i, 0, (t + i, "f")))
     hechas = [x for x in cerradas if x]
     assert len(hechas) == 1 and hechas[0]["valida"] == 1 and hechas[0]["max_pax"] == 1
@@ -85,7 +85,7 @@ def test_carrera_corta_se_descarta(srv):
     m, _, _ = srv
     c = m.Carrera()
     cerradas = [c.actualizar(i, 1, (i, "f")) for i in range(15)]
-    cerradas += [c.actualizar(i, 0, (i, "f")) for i in range(15, 30)]
+    cerradas += [c.actualizar(i, 0, (i, "f")) for i in range(15, 45)]
     hechas = [x for x in cerradas if x]
     assert len(hechas) == 1 and hechas[0]["valida"] == 0
 
@@ -113,7 +113,7 @@ def test_pasajeros_distintos_y_linea_de_tiempo(srv):
     """Suben 2, baja 1, sube otro: fueron 3 pasajeros distintos (máx. 2 a la vez)."""
     m, _, _ = srv
     c = m.Carrera()
-    t, conteos = 0, [2] * 60 + [1] * 60 + [2] * 60 + [0] * 15
+    t, conteos = 0, [2] * 60 + [1] * 60 + [2] * 60 + [0] * 30
     cerradas = []
     for n in conteos:
         cerradas.append(c.actualizar(t, n, (t, "f")))
@@ -127,7 +127,7 @@ def test_pasajeros_distintos_y_linea_de_tiempo(srv):
 def test_un_cuadro_raro_no_cuenta_como_subida(srv):
     m, _, _ = srv
     c = m.Carrera()
-    conteos = [1] * 30 + [2, 1, 1] + [1] * 30 + [0] * 15  # un falso positivo de 1 foto
+    conteos = [1] * 30 + [2, 1, 1] + [1] * 30 + [0] * 30  # un falso positivo de 1 foto
     cerradas = [c.actualizar(i, n, (i, "f")) for i, n in enumerate(conteos)]
     assert [x for x in cerradas if x][0]["pasajeros"] == 1
 
@@ -186,7 +186,7 @@ def test_flujo_carrera_por_api(srv):
         r = enviar(cli, tok, t0 + i)
     assert r.json()["estado"] == "EN_CARRERA" and r.json()["modo"] == "rapido"
     personas.clear()
-    for i in range(50, 65):
+    for i in range(50, 80):
         r = enviar(cli, tok, t0 + i)
     assert r.json()["estado"] == "LIBRE"
     carreras = cli.get("/api/panel/carreras", headers=PANEL).json()
@@ -234,7 +234,7 @@ def test_lote_de_una_semana_sin_internet(srv):
     r = cli.post("/api/v1/lote", headers=h, content=lote_bytes([(hace_5_dias + i, 1) for i in range(60)]))
     assert r.status_code == 200 and r.json()["recibidas"] == 60
     personas.clear()
-    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(hace_5_dias + i, 0) for i in range(60, 80)]))
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(hace_5_dias + i, 0) for i in range(60, 95)]))
     carreras = cli.get("/api/panel/carreras", headers=PANEL).json()
     assert len(carreras) == 1
     assert abs(carreras[0]["inicio"] - hace_5_dias) < 2 and 55 <= carreras[0]["duracion"] <= 62
@@ -252,7 +252,7 @@ def test_carreras_del_dia_y_fotos_de_una_carrera(srv):
     personas.append(PERSONA)
     cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 1) for i in range(90)]))
     personas.clear()
-    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 0) for i in range(90, 110)]))
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 0) for i in range(90, 125)]))
     dia = __import__("datetime").datetime.fromtimestamp(t0).strftime("%Y-%m-%d")
     r = cli.get(f"/api/panel/taxi/TX-000001/carreras?dia={dia}", headers=PANEL).json()
     assert r["resumen"]["carreras"] == 1 and r["resumen"]["pasajeros"] == 1
@@ -272,7 +272,7 @@ def test_reanalizar_dia_con_jaula_quita_falsos_positivos(srv):
     personas.append([0.85, 0.2, 0.95, 0.4, 0.8])  # a la derecha: la ventana
     cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 0) for i in range(60)]))
     personas.clear()
-    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 0) for i in range(60, 80)]))
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 0) for i in range(60, 95)]))
     dia = __import__("datetime").datetime.fromtimestamp(t0).strftime("%Y-%m-%d")
     assert cli.get(f"/api/panel/taxi/TX-000001/carreras?dia={dia}", headers=PANEL).json()["resumen"]["carreras"] == 1
 

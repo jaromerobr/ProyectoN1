@@ -45,7 +45,7 @@ FIRMWARE = DATOS / "firmware"  # taxiff_cam-<versión>.bin: la más nueva se ins
 
 # Lógica de carrera (los mismos tiempos que la app y el ESP32).
 CONFIRMAR_S = 3      # pasajero visto este tiempo seguido => empieza la carrera
-GRACIA_S = 10        # sin pasajeros este tiempo => termina
+GRACIA_S = 20        # sin pasajeros este tiempo => termina (alguien que se agacha no corta la carrera)
 MINIMO_S = 30        # carreras más cortas se guardan como descartadas
 CAMBIO_S = 3         # un cambio en el conteo dura esto => alguien subió o bajó
 HUECO_S = 10 * 60    # sin fotos este tiempo DENTRO de una carrera (cámara apagada) => se cierra

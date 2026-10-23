@@ -48,7 +48,7 @@ static const char *AP_PASS = "taxiff123";
 
 // ---- Reglas de carrera ------------------------------------------------------
 static const uint32_t ENTER_CONFIRM_MS = 1000;
-static const uint32_t EXIT_GRACE_MS = 10000;
+static const uint32_t EXIT_GRACE_MS = 20000;
 static const uint32_t MIN_TRIP_MS = 30000;
 
 Preferences prefs;
@@ -345,7 +345,7 @@ else c.strokeRect(x1*k,y1*k,(x2-x1)*k,(y2-y1)*k);
 const w=c.measureText(t).width+12;c.fillRect(lx,Math.max(0,ly-28),w,26);c.fillStyle='#000';c.fillText(t,lx+6,Math.max(20,ly-8));}
 $('n').textContent=d.pax;$('ms').textContent=d.ms;$('fps').textContent=d.fps;
 const st=['LIBRE','CONFIRMANDO','EN CARRERA'][d.state];$('st').textContent=st;$('st').style.background=d.state==2?'#1f3d2a':d.state==1?'#4a3a10':'#2a2a2e';
-$('timer').textContent=dur(d.trip_s||0);$('tdet').textContent=d.state==2?(d.zero_s?('Sin pasajeros · cierra en '+Math.max(0,10-d.zero_s)+' s'):('máx. '+d.max+' pasajero(s)')):'Esperando pasajeros';
+$('timer').textContent=dur(d.trip_s||0);$('tdet').textContent=d.state==2?(d.zero_s?('Sin pasajeros · cierra en '+Math.max(0,20-d.zero_s)+' s'):('máx. '+d.max+' pasajero(s)')):'Esperando pasajeros';
 }catch(e){}setTimeout(frame,120)}
 async function info(){try{const d=await (await fetch('/status')).json();$('tc').textContent=d.trips.length;
 $('tr').innerHTML=d.trips.length?d.trips.slice().reverse().map(t=>`<tr><td>${t.inicio}</td><td>${dur(t.dur)}</td><td>${t.max} pax</td></tr>`).join(''):'<tr><td class="m">Aún no hay carreras</td></tr>';
