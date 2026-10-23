@@ -143,12 +143,13 @@ int capEvery = 0;
 uint32_t capCount = 0, lastCap = 0;
 uint32_t capMinFreeKB() { return sdOk ? 100 * 1024 : 300; }
 void removeFilesIn(const char *dirPath);
+void logEvent(const char *fmt, ...);
 
 // Envío al servidor. Cada cámara se identifica con su ID de fábrica
 // (TX-XXXXXX, de la MAC) y el token que el servidor le da al registrarse.
 // Sin internet, las fotos se guardan en /q y se suben después, las más viejas
 // primero.
-const char *FW_VERSION = "3.3";
+const char *FW_VERSION = "3.4";
 char devId[12];
 String srvUrl, devToken;
 char srvState[64] = "sin servidor configurado";
@@ -857,6 +858,50 @@ struct QHdr {
 const uint32_t QMAGIC = 0x32515854;  // "TXQ2"
 uint32_t bootN = 0;
 
+// Registro de lo que pasa (arranques, WiFi, estado cada minuto) en
+// /registro.txt de la SD o memoria interna, para revisar después qué pasó
+// mientras la cámara funcionaba sola. Se lee por cable con el comando LOG.
+void logEvent(const char *fmt, ...) {
+  if (!storeOk()) return;
+  char msg[180];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(msg, sizeof msg, fmt, ap);
+  va_end(ap);
+  File f = store->open("/registro.txt", "a");
+  if (!f) return;
+  if (f.size() > 256 * 1024) {  // muy largo: se guarda como .old y se empieza otro
+    f.close();
+    store->remove("/registro.old");
+    store->rename("/registro.txt", "/registro.old");
+    f = store->open("/registro.txt", "a");
+    if (!f) return;
+  }
+  char ts[24];
+  time_t t = nowEpoch();
+  if (t) {
+    struct tm tm;
+    localtime_r(&t, &tm);
+    strftime(ts, sizeof ts, "%d/%m %H:%M:%S", &tm);
+  } else {
+    snprintf(ts, sizeof ts, "+%lus sin hora", millis() / 1000);
+  }
+  f.printf("%s [arranque %u] %s\n", ts, (unsigned)bootN, msg);
+  f.close();
+}
+
+// Muestra por el puerto serie el final del registro (comando LOG).
+void printLog() {
+  File f = storeOk() ? store->open("/registro.txt", "r") : File();
+  if (!f) { Serial.println("# (registro vacío)"); return; }
+  size_t size = f.size();
+  if (size > 6000) f.seek(size - 6000);
+  Serial.println("# ---- registro ----");
+  while (f.available()) Serial.write(f.read());
+  Serial.println("# ---- fin del registro ----");
+  f.close();
+}
+
 // Lee la foto `seq` de la cola (buf queda en PSRAM: liberarlo con free).
 bool readQueued(uint32_t seq, uint8_t *&buf, size_t &len, uint64_t &tsMs, int &n) {
   buf = nullptr;
@@ -1255,7 +1300,9 @@ void startWifi() {
     configTzTime("<-05>5", "pool.ntp.org", "time.google.com");  // hora de Ecuador
     Serial.printf("# WiFi OK: abre http://%s o http://taxiff-cam.local\n",
                   WiFi.localIP().toString().c_str());
+    logEvent("WiFi conectado a %s (%d dBm), IP %s", ssid.c_str(), WiFi.RSSI(), WiFi.localIP().toString().c_str());
   } else {
+    logEvent("no se pudo conectar a '%s' al arrancar (estado %d): sigue intentando cada 30 s", ssid.c_str(), WiFi.status());
     if (ssid.length()) {
       // Diagnóstico: por qué no conectó y qué redes ve el ESP32.
       int st = WiFi.status();
@@ -1271,10 +1318,44 @@ void startWifi() {
       }
     }
     apMode = true;
-    WiFi.mode(WIFI_AP);
+    // Red propia para configurarla Y, a la vez, sigue intentando la WiFi
+    // guardada (wifiWatchdog): un fallo al arrancar no la deja desconectada.
+    WiFi.mode(ssid.length() ? WIFI_AP_STA : WIFI_AP);
     WiFi.softAP(AP_SSID, AP_PASS);
     Serial.printf("# Sin WiFi: conectate a la red %s (clave %s) y abre http://192.168.4.1/wifi\n",
                   AP_SSID, AP_PASS);
+  }
+}
+
+// Vigila la WiFi (cada 10 s desde el bucle principal):
+// - si al arrancar no conectó, reintenta la red guardada cada 30 s y, cuando
+//   conecta, apaga la red propia y empieza a enviar;
+// - anota en el registro cuando se pierde o vuelve la conexión.
+void wifiWatchdog(uint32_t now) {
+  static uint32_t lastTry = 0;
+  static int wasConnected = -1;
+  bool connected = WiFi.status() == WL_CONNECTED;
+  if ((int)connected != wasConnected) {
+    if (wasConnected >= 0) {
+      if (connected) logEvent("WiFi conectado (%d dBm), IP %s", WiFi.RSSI(), WiFi.localIP().toString().c_str());
+      else logEvent("WiFi perdido (estado %d): reconectando", WiFi.status());
+    }
+    wasConnected = connected;
+  }
+  if (apMode && connected) {
+    apMode = false;
+    WiFi.softAPdisconnect(true);
+    MDNS.begin("taxiff-cam");
+    configTzTime("<-05>5", "pool.ntp.org", "time.google.com");
+    Serial.printf("# WiFi OK (reintento): http://%s\n", WiFi.localIP().toString().c_str());
+    logEvent("conectó en un reintento: apaga la red propia y envía");
+    return;
+  }
+  if (apMode && !connected && now - lastTry > 30000) {
+    String ssid = prefs.getString("ssid", "");
+    if (!ssid.length()) return;
+    lastTry = now;
+    WiFi.begin(ssid.c_str(), prefs.getString("pass", "").c_str());
   }
 }
 
@@ -1311,6 +1392,7 @@ void setup() {
   if (storeOk()) store->mkdir("/fotos");
   freeKB = measureFreeKB();
   Serial.printf("# espacio libre para fotos: %u MB\n", (unsigned)(freeKB / 1024));
+  logEvent("ARRANQUE: %s · firmware %s · %s", bootReason.c_str(), FW_VERSION, sdOk ? "con tarjeta SD" : "sin SD");
   loadConfig();
   // Cuando se pierde una foto (WiFi, escritura en memoria, 640x480) la tarea
   // de la cámara imprime "EV-EOF-OVF" y su pila es tan pequeña que imprimir la
@@ -1342,6 +1424,8 @@ void serialCommands() {
     } else if (line.startsWith("SERVER ")) {
       setServer(line.substring(7));
       Serial.printf("# servidor: %s\n", srvUrl.c_str());
+    } else if (line == "LOG") {
+      printLog();
     } else if (line == "SCAN") {
       int n = WiFi.scanNetworks(false, true);
       Serial.printf("# SCAN: %d redes\n", n);
@@ -1572,6 +1656,15 @@ void housekeeping(uint32_t now) {
   if (now - lastInfo > 10000) {
     lastInfo = now;
     if (storeOk()) freeKB = measureFreeKB();
+    wifiWatchdog(now);
+    static uint32_t lastLog = 0;
+    if (!lastLog || now - lastLog > 60000) {  // estado en el registro cada minuto
+      lastLog = now;
+      logEvent("estado: %s %d dBm · servidor '%s' · %u enviadas · %u en cola · %.1f fps · %.0f C · RAM %u KB",
+               apMode ? "SIN WiFi (red propia)" : WiFi.status() == WL_CONNECTED ? "WiFi ok" : "WiFi caída",
+               WiFi.RSSI(), srvState, (unsigned)sentOk, (unsigned)queueSize(), fps, temp,
+               (unsigned)(ESP.getFreeHeap() / 1024));
+    }
     Serial.printf("# %s · %s · %.1f fps · %.1f C · CPU %d%% · RAM %u KB · %s\n",
                   apMode ? "AP 192.168.4.1" : WiFi.localIP().toString().c_str(),
                   camFailSince ? "SIN IMAGEN" : "camara ok", fps, temp,

@@ -6,11 +6,12 @@ Configura y revisa la cámara Taxiff por el cable USB (puerto UART de la placa).
   .\camara.ps1 servidor "https://..."       a dónde envía las fotos
   .\camara.ps1 redes                        redes WiFi que ve la cámara
   .\camara.ps1 mensajes 30                  lo que va diciendo durante 30 s
+  .\camara.ps1 registro                     qué pasó mientras funcionaba sola (arranques, WiFi, estado)
 
 Opcional: -Puerto COM5 (si no, usa el primer puerto que encuentre).
 #>
 param(
-  [Parameter(Position = 0)][ValidateSet("ip", "wifi", "servidor", "redes", "mensajes")][string]$Accion = "ip",
+  [Parameter(Position = 0)][ValidateSet("ip", "wifi", "servidor", "redes", "mensajes", "registro")][string]$Accion = "ip",
   [Parameter(Position = 1)][string]$Valor1 = "",
   [Parameter(Position = 2)][string]$Valor2 = "",
   [string]$Puerto = ""
@@ -121,6 +122,19 @@ try {
         Write-Host "Redes que ve la cámara (solo 2.4 GHz, más cerca de 0 dBm = mejor señal):"
         $redes | ForEach-Object { Write-Host ($_ -replace "^#\s+", "  ") }
       } else { Write-Host "La cámara no respondió (puede estar ocupada conectándose). Repite en 1 minuto." }
+    }
+
+    "registro" {
+      Write-Host "Leyendo el registro de la cámara..."
+      $t = ""
+      for ($i = 0; $i -lt 6 -and $t -notmatch "fin del registro|registro vac"; $i++) {
+        $port.Write("LOG`n")
+        $t += Leer 6 "fin del registro|registro vac"
+      }
+      $lineas = $t -split "`n" | Where-Object { $_ -notmatch "^#" -and $_.Trim() } | ForEach-Object { $_.TrimEnd() }
+      if ($lineas) { $lineas | ForEach-Object { Write-Host "  $_" } }
+      elseif ($t -match "registro vac") { Write-Host "El registro está vacío." }
+      else { Write-Host "La cámara no respondió (puede estar conectándose). Repite en 1 minuto." }
     }
 
     "mensajes" {
