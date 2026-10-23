@@ -63,7 +63,7 @@ Para cargar una versión nueva **en todas las cámaras por internet**:
 ## Configurar una cámara
 
 1. **WiFi:**
-   - Si no conoce ninguna red, la cámara crea la red `Taxiff-Cam` (clave `taxiff123`). Conéctate y abre `http://192.168.4.1/wifi`.
+   - Guarda hasta 5 redes y se conecta a la de mejor señal. Si no encuentra ninguna, o si mantienes BOOT 3 s, crea la red `Taxiff-Cam` (clave `taxiff123`). Al conectarte desde el celular, la página para elegir la WiFi se abre sola (o abre `http://192.168.4.1/wifi`). Ver [docs/GUIA_RAPIDA.md](../docs/GUIA_RAPIDA.md#sin-cable-desde-el-celular).
    - Por cable (puerto serie, 115200): `WIFI <red><TAB><clave>`.
    - En el taxi, se usa el **hotspot del teléfono del conductor**, que tiene que estar en **2.4 GHz**.
 2. **Servidor:** en la página de la cámara, sección "Servidor Taxiff", escribe la dirección (por ejemplo `https://taxiff.midominio.com`). Por cable: `SERVER <url>`.

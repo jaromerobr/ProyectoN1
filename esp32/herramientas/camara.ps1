@@ -5,13 +5,16 @@ Configura y revisa la cámara Taxiff por el cable USB (puerto UART de la placa).
   .\camara.ps1 wifi "NOMBRE_RED" "CLAVE"    la conecta a esa WiFi (tiene que ser 2.4 GHz)
   .\camara.ps1 servidor "https://..."       a dónde envía las fotos
   .\camara.ps1 redes                        redes WiFi que ve la cámara
+  .\camara.ps1 guardadas                    redes WiFi que tiene guardadas (hasta 5)
+  .\camara.ps1 olvidar "NOMBRE_RED"         borra una red guardada
+  .\camara.ps1 portal                       abre su red Taxiff-Cam por 10 min (igual que BOOT 3 s)
   .\camara.ps1 mensajes 30                  lo que va diciendo durante 30 s
   .\camara.ps1 registro                     qué pasó mientras funcionaba sola (arranques, WiFi, estado)
 
 Opcional: -Puerto COM5 (si no, usa el primer puerto que encuentre).
 #>
 param(
-  [Parameter(Position = 0)][ValidateSet("ip", "wifi", "servidor", "redes", "mensajes", "registro")][string]$Accion = "ip",
+  [Parameter(Position = 0)][ValidateSet("ip", "wifi", "servidor", "redes", "guardadas", "olvidar", "portal", "mensajes", "registro")][string]$Accion = "ip",
   [Parameter(Position = 1)][string]$Valor1 = "",
   [Parameter(Position = 2)][string]$Valor2 = "",
   [string]$Puerto = ""
@@ -122,6 +125,32 @@ try {
         Write-Host "Redes que ve la cámara (solo 2.4 GHz, más cerca de 0 dBm = mejor señal):"
         $redes | ForEach-Object { Write-Host ($_ -replace "^#\s+", "  ") }
       } else { Write-Host "La cámara no respondió (puede estar ocupada conectándose). Repite en 1 minuto." }
+    }
+
+    "guardadas" {
+      $port.Write("REDES`n")
+      $t = Leer 6 "REDES guardadas: (\d+)[\s\S]*\n#[^\n]*fps"
+      if ($t -match "REDES guardadas: (\d+)") {
+        Write-Host "Redes guardadas: $($Matches[1])"
+        Mensajes $t | Where-Object { $_ -match "^#   \S" } | ForEach-Object { Write-Host ($_ -replace "^#\s+", "  ") }
+      } else { Write-Host "La cámara no respondió (puede estar conectándose). Repite en 1 minuto." }
+    }
+
+    "olvidar" {
+      if (-not $Valor1) { Write-Host 'Uso: .\camara.ps1 olvidar "NOMBRE_RED"'; exit 1 }
+      $port.Write("OLVIDAR $Valor1`n")
+      $t = Leer 5 "red olvidada"
+      if ($t -match "red olvidada") { Write-Host "Red '$Valor1' borrada." }
+      else { Write-Host "La cámara no confirmó. Espera 1 minuto y repite." }
+    }
+
+    "portal" {
+      $port.Write("PORTAL`n")
+      $t = Leer 8 "Taxiff-Cam"
+      if ($t -match "Taxiff-Cam") {
+        Write-Host "Red de configuración abierta por 10 minutos."
+        Write-Host "En el celular: conéctate a Taxiff-Cam (clave taxiff123) y la página se abre sola."
+      } else { Write-Host "La cámara no confirmó (quizás ya estaba abierta). Mira con .\camara.ps1 mensajes 10" }
     }
 
     "registro" {

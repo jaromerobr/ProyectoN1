@@ -55,13 +55,52 @@ Al final dice `CONECTADA. IP de la cámara: 192.168.x.x`. Esa es su página: `ht
 
 ### Sin cable (desde el celular)
 
-Si la cámara no encuentra ninguna red conocida, a los 1–2 minutos crea su propia red:
+La cámara guarda **hasta 5 redes**: la casa del dueño, su hotspot, la de un familiar, etc. Al encenderse se conecta sola a la de mejor señal.
 
-1. En el celular, conéctate a la red **`Taxiff-Cam`** (clave `taxiff123`).
-2. Abre **http://192.168.4.1/wifi**.
-3. Escribe la red y la clave, y guarda. La cámara se reinicia y se conecta.
+**Cuándo abre su red de configuración `Taxiff-Cam`:**
+- Si no tiene ninguna red guardada, la abre siempre.
+- Si no encuentra ninguna de sus redes, la abre por 10 minutos.
+- Si mantienes apretado el botón **BOOT** de la placa por 3 segundos, la abre por 10 minutos. Esto funciona aunque ya esté conectada, y sirve para agregar otra red.
+- Por cable: `camara.ps1 portal`.
 
-`192.168.4.1` **solo funciona** mientras estés conectado a la red `Taxiff-Cam`.
+**Pasos en el celular:**
+1. En *Ajustes → Wi-Fi*, conéctate a **`Taxiff-Cam`** (clave `taxiff123`).
+2. **La página se abre sola.** Si no aparece, abre **http://192.168.4.1/wifi**.
+3. Toca tu red en la lista, escribe la clave y presiona **Guardar y conectar**. La cámara se reinicia y se conecta.
+
+En esa misma página puedes ver las redes guardadas y quitar las que ya no sirvan. Con la cámara conectada, también está en `http://<ip-de-la-cámara>/wifi`.
+
+Mientras la red de configuración está abierta, la cámara sigue grabando y subiendo fotos.
+
+**Por cable:**
+
+| Comando | Qué hace |
+|---|---|
+| `.\camara.ps1 wifi "NOMBRE_RED" 'CLAVE'` | Agrega una red. Las anteriores se mantienen |
+| `.\camara.ps1 guardadas` | Lista las redes guardadas |
+| `.\camara.ps1 olvidar "NOMBRE_RED"` | Borra una red |
+| `.\camara.ps1 portal` | Abre la red `Taxiff-Cam` por 10 minutos |
+
+### Alimentación: en el auto o en casa
+
+La cámara va en una cajita con un conector USB-C. **No importa de dónde reciba la corriente:**
+- En el auto: cargador de encendedor de 2 A o más.
+- En casa: el cargador de un celular (5 V, 2 A) y un cable USB-C.
+
+**Cómo se usa:**
+1. Durante el día graba en la tarjeta SD, aunque no tenga internet.
+2. En la noche, el dueño la desconecta del auto y la conecta en casa.
+3. Sola se conecta a la WiFi de la casa (si está guardada) y sube todo lo pendiente. Puede tardar un rato si fue un día largo.
+
+> **Hora sin internet:** si la cámara se apaga y vuelve a encender sin internet, no sabe la hora hasta conectarse. Las fotos se guardan igual, pero conviene agregar un reloj **DS3231** (unos pocos dólares) para que la hora sea exacta siempre.
+
+**Ritmo de fotos:**
+
+| Situación | Ritmo |
+|---|---|
+| Cambia el número de pasajeros, o se está confirmando una carrera | 1 foto por segundo durante ~6 s |
+| Carrera estable | Una cada 4 s |
+| Cabina vacía | Una cada 15 s |
 
 ---
 
@@ -171,7 +210,7 @@ Para reconocer un problema de corriente: si ves muchos `ARRANQUE: encendido norm
 | `camara.ps1` dice "No hay ninguna cámara conectada" | Usa el puerto **UART**. Prueba otro cable USB (muchos solo cargan) u otro puerto de la PC. |
 | No conecta: "no encuentra la red" | La red es solo de 5 GHz o el nombre está mal. Mira `camara.ps1 redes`. En el celular, pon el hotspot en 2.4 GHz. |
 | No conecta: "clave incorrecta" | Revisa la clave. Escríbela con comillas simples `'…'`. |
-| No abre `192.168.4.1` | Solo funciona conectado a la red `Taxiff-Cam`, y solo si la cámara no encontró ninguna red conocida. |
+| No abre `192.168.4.1` | Solo funciona conectado a la red `Taxiff-Cam`. Si no la ves, mantén BOOT 3 s. Si el celular dice "sin internet", elige "seguir conectado". |
 | No abre `http://<ip-de-la-cámara>` | La PC o el celular tienen que estar en la misma red que la cámara. Usa `camara.ps1 ip`. |
 | La cámara dice "sin internet" | El servidor está apagado, o cambió la dirección del túnel. Repite los pasos 1 y 4. |
 | La cámara se reinicia o se desconecta sola | Casi siempre es la alimentación. Usa un cargador de 2 A o más y un cable corto. Mira `camara.ps1 mensajes`. |

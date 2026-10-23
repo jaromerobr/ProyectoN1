@@ -12,6 +12,9 @@
 
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <DNSServer.h>
+#include <algorithm>
+#include <vector>
 #include <Preferences.h>
 #include <FFat.h>
 #include <SD_MMC.h>
@@ -26,6 +29,10 @@
 #include "human_face_detect_mnp01.hpp"
 #include <taxiff-cabezas-v2_inferencing.h>
 #include "time.h"
+
+// Va aquí arriba porque Arduino coloca los prototipos de las funciones antes
+// del resto del código, y algunas usan este tipo.
+struct Red { String ssid, pass; };  // una red WiFi guardada
 
 // ---- Pines de cámara (ESP32-S3-EYE / Freenove S3 CAM) ----------------------
 #define XCLK_GPIO_NUM 15
@@ -145,11 +152,57 @@ uint32_t capMinFreeKB() { return sdOk ? 100 * 1024 : 300; }
 void removeFilesIn(const char *dirPath);
 void logEvent(const char *fmt, ...);
 
+// ---- Redes WiFi guardadas -----------------------------------------------------
+// Hasta 5 (la casa del dueño, su hotspot, la de un familiar…), la más reciente
+// primero. Se conecta sola a la que tenga mejor señal entre las que ve.
+const int MAX_REDES = 5;
+DNSServer dns;
+uint32_t portalUntil = 0;  // la red propia de configuración se cierra a esta hora (millis)
+
+std::vector<Red> loadNetworks() {
+  // Las versiones anteriores guardaban una sola red en "ssid"/"pass".
+  if (prefs.isKey("ssid") && !prefs.isKey("w0")) {
+    String s = prefs.getString("ssid", "");
+    if (s.length()) prefs.putString("w0", s + "\t" + prefs.getString("pass", ""));
+    prefs.remove("ssid");
+    prefs.remove("pass");
+  }
+  std::vector<Red> v;
+  for (int i = 0; i < MAX_REDES; i++) {
+    String e = prefs.getString(("w" + String(i)).c_str(), "");
+    int t = e.indexOf('\t');
+    if (t > 0) v.push_back({e.substring(0, t), e.substring(t + 1)});
+  }
+  return v;
+}
+
+void saveNetworks(const std::vector<Red> &v) {
+  for (int i = 0; i < MAX_REDES; i++) {
+    String k = "w" + String(i);
+    if (i < (int)v.size()) prefs.putString(k.c_str(), v[i].ssid + "\t" + v[i].pass);
+    else if (prefs.isKey(k.c_str())) prefs.remove(k.c_str());
+  }
+}
+
+void addNetwork(const String &ssid, const String &pass) {
+  auto v = loadNetworks();
+  v.erase(std::remove_if(v.begin(), v.end(), [&](const Red &r) { return r.ssid == ssid; }), v.end());
+  v.insert(v.begin(), {ssid, pass});
+  if ((int)v.size() > MAX_REDES) v.resize(MAX_REDES);
+  saveNetworks(v);
+}
+
+void removeNetwork(const String &ssid) {
+  auto v = loadNetworks();
+  v.erase(std::remove_if(v.begin(), v.end(), [&](const Red &r) { return r.ssid == ssid; }), v.end());
+  saveNetworks(v);
+}
+
 // Envío al servidor. Cada cámara se identifica con su ID de fábrica
 // (TX-XXXXXX, de la MAC) y el token que el servidor le da al registrarse.
 // Sin internet, las fotos se guardan en /q y se suben después, las más viejas
 // primero.
-const char *FW_VERSION = "3.5";
+const char *FW_VERSION = "3.6";
 char devId[12];
 String srvUrl, devToken;
 char srvState[64] = "sin servidor configurado";
@@ -369,15 +422,40 @@ fetch('/status').then(r=>r.json()).then(d=>{for(const k of KS)$(k).value=k=='pth
 frame();info();
 </script></body></html>)HTML";
 
+// Página para elegir la WiFi desde el teléfono. Se abre sola al conectarse a la
+// red "Taxiff-Cam" (portal cautivo) o en http://<ip-de-la-cámara>/wifi.
 static const char SETUP_PAGE[] PROGMEM = R"HTML(<!doctype html><html lang="es"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Taxiff Cam · WiFi</title>
-<style>body{font:16px system-ui;background:#0b0b0d;color:#f2f2f5;padding:24px;max-width:420px;margin:auto}
-input,button{width:100%;padding:14px;margin:8px 0;border-radius:14px;border:1px solid #333;background:#17171a;color:#fff;font-size:16px}
-button{background:#ff9f0a;color:#000;font-weight:800;border:0}a{color:#ff9f0a}</style></head><body>
-<h2>Conectar Taxiff Cam a internet</h2><p>Escribe la WiFi de la casa o el hotspot del teléfono.</p>
-<form method="POST" action="/save"><input name="s" placeholder="Nombre de la red (SSID)" required>
-<input name="p" type="password" placeholder="Contraseña"><button>Guardar y reiniciar</button></form>
-<p><a href="/">Ver la cámara sin conectar a internet</a></p></body></html>)HTML";
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Taxiff · WiFi</title>
+<style>:root{--bg:#f2f2f4;--card:#fff;--fg:#111114;--m:#6f6f76;--acc:#0a6cff}
+@media(prefers-color-scheme:dark){:root{--bg:#000;--card:#1a1a1c;--fg:#f4f4f6;--m:#9b9ba3;--acc:#3e91ff}}
+body{font:15px system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:460px;margin:auto}
+h2{margin:8px 0 4px}.m{color:var(--m);font-size:13px}a{color:var(--acc)}
+.card{background:var(--card);border-radius:22px;padding:14px 16px;margin:12px 0}
+.red{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px 4px;border-bottom:1px solid #8883;cursor:pointer}
+.red:last-child{border:0}
+input,button{width:100%;box-sizing:border-box;padding:13px;margin:6px 0;border-radius:14px;border:1px solid #8884;background:var(--bg);color:var(--fg);font-size:16px}
+button{background:var(--acc);color:#fff;border:0;font-weight:700}
+.quitar{width:auto;padding:7px 14px;margin:0;background:#8882;color:var(--fg)}</style></head><body>
+<h2>Taxiff · WiFi</h2>
+<p class="m">Elige la WiFi de tu casa o el hotspot de tu teléfono (2,4 GHz). La cámara recuerda varias redes y se conecta sola a la que encuentre para subir las fotos.</p>
+<div class="card"><b>Redes que ve la cámara</b><div id="vis" class="m">Buscando redes…</div></div>
+<form class="card" method="POST" action="/save"><b>Conectar a una red</b>
+<input id="s" name="s" placeholder="Nombre de la red" required>
+<input id="p" name="p" type="password" placeholder="Contraseña">
+<label class="m"><input type="checkbox" style="width:auto;margin:0 6px 0 0" onclick="p.type=this.checked?'text':'password'">mostrar contraseña</label>
+<button>Guardar y conectar</button></form>
+<div class="card"><b>Redes guardadas</b><div id="gua" class="m">…</div></div>
+<p class="m"><a href="/">Ver la cámara</a></p>
+<script>
+const esc=t=>String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const barras=r=>r>-55?'▂▄▆█':r>-67?'▂▄▆':r>-75?'▂▄':'▂';
+const elegir=n=>{s.value=n;p.focus();};
+fetch('/redes').then(r=>r.json()).then(d=>{
+ vis.innerHTML=d.visibles.length?d.visibles.map((n,i)=>`<div class="red" data-i="${i}"><span>${esc(n.ssid)}${d.guardadas.includes(n.ssid)?' · <b>guardada</b>':''}</span><span>${barras(n.rssi)}</span></div>`).join(''):'No encontró redes de 2,4 GHz. Acércala al router.';
+ vis.querySelectorAll('.red').forEach(el=>el.onclick=()=>elegir(d.visibles[el.dataset.i].ssid));
+ gua.innerHTML=d.guardadas.length?d.guardadas.map(g=>`<div class="red"><span>${esc(g)}${g===d.conectada?' · <b>conectada</b>':''}</span><form method="POST" action="/wifi_borrar" style="margin:0"><input type="hidden" name="s" value="${esc(g)}"><button class="quitar">Quitar</button></form></div>`).join(''):'Ninguna todavía.';
+});
+</script></body></html>)HTML";
 
 esp_err_t handlePage(httpd_req_t *req) {
   httpd_resp_set_type(req, "text/html");
@@ -402,24 +480,88 @@ String urlDecode(const String &s) {
   return o;
 }
 
-esp_err_t handleSave(httpd_req_t *req) {
-  char buf[256] = {0};
+// Campo `key` de un formulario (application/x-www-form-urlencoded).
+String formField(const String &body, const char *key) {
+  String k = String(key) + "=";
+  int i = body.startsWith(k) ? 0 : body.indexOf("&" + k);
+  if (i < 0) return "";
+  if (i > 0) i++;
+  int fin = body.indexOf('&', i);
+  return urlDecode(body.substring(i + k.length(), fin < 0 ? body.length() : fin));
+}
+
+String readForm(httpd_req_t *req) {
+  char buf[400] = {0};
   int len = httpd_req_recv(req, buf, min((size_t)req->content_len, sizeof(buf) - 1));
-  if (len <= 0) return ESP_FAIL;
-  String body(buf), ssid, pass;
-  for (String part : {body.substring(0, body.indexOf('&')), body.substring(body.indexOf('&') + 1)}) {
-    if (part.startsWith("s=")) ssid = urlDecode(part.substring(2));
-    if (part.startsWith("p=")) pass = urlDecode(part.substring(2));
-  }
-  prefs.putString("ssid", ssid);
-  prefs.putString("pass", pass);
+  return len > 0 ? String(buf) : String();
+}
+
+// Guarda una red nueva (se suma a las que ya conoce) y reinicia para conectarse.
+esp_err_t handleSave(httpd_req_t *req) {
+  String body = readForm(req), ssid = formField(body, "s"), pass = formField(body, "p");
+  if (!ssid.length()) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Falta el nombre de la red");
+  addNetwork(ssid, pass);
+  logEvent("red WiFi agregada desde el teléfono: %s", ssid.c_str());
   httpd_resp_set_type(req, "text/html");
-  httpd_resp_sendstr(req, "<meta charset=utf-8><body style='font:18px system-ui;padding:24px'>"
-                          "Guardado. La cámara se reinicia y se conecta a la red. "
-                          "Vuelve a tu WiFi y abre <b>http://taxiff-cam.local</b></body>");
+  String html = String("<meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+                       "<body style='font:17px system-ui;padding:24px;max-width:440px;margin:auto'>"
+                       "<h2>Guardado ✓</h2><p>La cámara se reinicia y se conecta a <b>") + ssid + "</b>.</p>"
+                "<p>En unos segundos empieza a subir las fotos al servidor. Ya puedes volver a tu WiFi.</p></body>";
+  httpd_resp_sendstr(req, html.c_str());
   delay(1500);
   ESP.restart();
   return ESP_OK;
+}
+
+esp_err_t handleWifiBorrar(httpd_req_t *req) {
+  String ssid = formField(readForm(req), "s");
+  removeNetwork(ssid);
+  logEvent("red WiFi quitada: %s", ssid.c_str());
+  httpd_resp_set_status(req, "303 See Other");
+  httpd_resp_set_hdr(req, "Location", "/wifi");
+  return httpd_resp_send(req, nullptr, 0);
+}
+
+String jsonEsc(const String &s) {
+  String o;
+  for (char c : s) { if (c == '"' || c == '\\') o += '\\'; if ((uint8_t)c >= 0x20) o += c; }
+  return o;
+}
+
+// /redes: redes que ve la cámara (sin repetir, mejor señal primero) y guardadas.
+esp_err_t handleRedes(httpd_req_t *req) {
+  int n = WiFi.scanNetworks();
+  std::vector<std::pair<int, String>> vis;
+  for (int i = 0; i < n; i++) {
+    String s = WiFi.SSID(i);
+    if (!s.length()) continue;
+    auto it = std::find_if(vis.begin(), vis.end(), [&](const std::pair<int, String> &v) { return v.second == s; });
+    if (it == vis.end()) vis.push_back({WiFi.RSSI(i), s});
+    else it->first = max(it->first, (int)WiFi.RSSI(i));
+  }
+  std::sort(vis.begin(), vis.end(), [](const std::pair<int, String> &a, const std::pair<int, String> &b) { return a.first > b.first; });
+  String j = "{\"conectada\":\"" + jsonEsc(WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String()) + "\",\"guardadas\":[";
+  auto redes = loadNetworks();
+  for (size_t i = 0; i < redes.size(); i++) j += String(i ? "," : "") + "\"" + jsonEsc(redes[i].ssid) + "\"";
+  j += "],\"visibles\":[";
+  for (size_t i = 0; i < vis.size(); i++)
+    j += String(i ? "," : "") + "{\"ssid\":\"" + jsonEsc(vis[i].second) + "\",\"rssi\":" + vis[i].first + "}";
+  j += "]}";
+  httpd_resp_set_type(req, "application/json");
+  return httpd_resp_send(req, j.c_str(), j.length());
+}
+
+// Portal cautivo: con la red propia abierta, cualquier dirección que pida el
+// teléfono (las pruebas de "¿hay internet?") se manda a la página de WiFi,
+// y el teléfono la abre solo.
+esp_err_t handleNotFound(httpd_req_t *req, httpd_err_code_t err) {
+  if (apMode) {
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/wifi");
+    return httpd_resp_send(req, nullptr, 0);
+  }
+  httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No existe");
+  return ESP_FAIL;
 }
 
 esp_err_t handleFrame(httpd_req_t *req) {
@@ -464,7 +606,7 @@ esp_err_t handleStatus(httpd_req_t *req) {
              ",\"fotos_libre_kb\":" + String(freeKB) +
              ",\"almacen\":\"" + (sdOk ? "sd" : fatOk ? "interna" : "ninguno") + "\"" +
              ",\"sd_gb\":" + String(sdOk ? SD_MMC.cardSize() / 1073741824.0 : 0, 1) +
-             ",\"net\":\"" + (apMode ? String("Red propia ") + AP_SSID : "WiFi " + WiFi.SSID() + " · " + WiFi.localIP().toString()) +
+             ",\"net\":\"" + (WiFi.status() != WL_CONNECTED ? String("Red propia ") + AP_SSID : "WiFi " + WiFi.SSID() + " · " + WiFi.localIP().toString()) +
              "\",\"trips\":[";
   for (int i = 0; i < tripCount; i++) {
     if (i) j += ",";
@@ -1227,7 +1369,7 @@ void uploadTask(void *) {
   uint32_t lastLive = 0, lastReg = 0, retryAt = 0, lastOta = millis() - OTA_CHECK_MS + 60000;
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(100));
-    bool online = !apMode && WiFi.status() == WL_CONNECTED && srvUrl.length();
+    bool online = WiFi.status() == WL_CONNECTED && srvUrl.length();
     if (online && !devToken.length() && millis() - lastReg > 10000) {
       lastReg = millis();
       registerDevice();
@@ -1240,8 +1382,18 @@ void uploadTask(void *) {
       otaHint = false;
       checkFirmware();
     }
-    // Ritmo: el que pide el servidor, o rápido si la cámara misma ve pasajeros.
-    uint32_t every = (paxNow > 0 || state != LIBRE) ? 1000 : srvInterval;
+    // Ritmo: 1 foto/s durante ~6 s cuando cambia el conteo o se está confirmando
+    // una carrera. Si no, el que pide el servidor; sin internet, 4 s en carrera
+    // y 15 s con la cabina vacía (la SD dura días sin llenarse).
+    static int lastPax = 0;
+    static uint32_t lastChange = 0;
+    if (paxNow != lastPax) {
+      lastPax = paxNow;
+      lastChange = millis();
+    }
+    bool burst = lastChange && millis() - lastChange < 6000;
+    uint32_t base = canSend ? srvInterval : ((paxNow > 0 || state != LIBRE) ? 4000 : 15000);
+    uint32_t every = (burst || state == CONFIRMANDO) ? 1000 : base;
     if (millis() - lastLive >= every) {
       lastLive = millis();
       xSemaphoreTake(lock, portMAX_DELAY);
@@ -1296,7 +1448,7 @@ void setServer(String url) {
 
 void startServer() {
   httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-  cfg.max_uri_handlers = 12;
+  cfg.max_uri_handlers = 16;
   cfg.stack_size = 8192;
   if (httpd_start(&server, &cfg) != ESP_OK) return;
   httpd_uri_t uris[] = {
@@ -1305,114 +1457,137 @@ void startServer() {
       {"/status", HTTP_GET, handleStatus, nullptr},
       {"/wifi", HTTP_GET, handleSetup, nullptr},
       {"/save", HTTP_POST, handleSave, nullptr},
+      {"/wifi_borrar", HTTP_POST, handleWifiBorrar, nullptr},
+      {"/redes", HTTP_GET, handleRedes, nullptr},
       {"/set", HTTP_GET, handleSet, nullptr},
       {"/fotos", HTTP_GET, handlePhotos, nullptr},
       {"/foto", HTTP_GET, handlePhoto, nullptr},
   };
   for (auto &u : uris) httpd_register_uri_handler(server, &u);
+  httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, handleNotFound);  // portal cautivo
+}
+
+// Busca las redes guardadas que estén a la vista y se conecta a la de mejor
+// señal (en redes de varios puntos, al punto de 2,4 GHz más fuerte). Prueba
+// hasta 3 candidatas. true si quedó conectada.
+bool connectBest(bool verbose) {
+  auto redes = loadNetworks();
+  if (redes.empty()) return false;
+  int n = WiFi.scanNetworks();
+  std::vector<std::pair<int, int>> cand;  // (señal, índice en la búsqueda)
+  for (int i = 0; i < n; i++)
+    for (auto &r : redes)
+      if (WiFi.SSID(i) == r.ssid) cand.push_back({WiFi.RSSI(i), i});
+  std::sort(cand.begin(), cand.end(), [](const std::pair<int, int> &a, const std::pair<int, int> &b) { return a.first > b.first; });
+  if (cand.empty() && verbose) {
+    Serial.println("# ninguna red guardada a la vista. Redes visibles:");
+    for (int i = 0; i < n && i < 12; i++) Serial.printf("#   red: %s  canal %d  %d dBm\n", WiFi.SSID(i).c_str(), WiFi.channel(i), WiFi.RSSI(i));
+  }
+  int tries = 0;
+  for (auto &c : cand) {
+    if (tries++ >= 3) break;
+    int i = c.second;
+    String ssid = WiFi.SSID(i), pass;
+    for (auto &r : redes) if (r.ssid == ssid) pass = r.pass;
+    if (verbose) Serial.printf("# Conectando a %s (canal %d, %d dBm)", ssid.c_str(), WiFi.channel(i), WiFi.RSSI(i));
+    WiFi.begin(ssid.c_str(), pass.c_str(), WiFi.channel(i), WiFi.BSSID(i));
+    for (int k = 0; k < 30 && WiFi.status() != WL_CONNECTED; k++) {
+      delay(500);
+      if (verbose) Serial.print(".");
+    }
+    if (verbose) Serial.println();
+    if (WiFi.status() == WL_CONNECTED) return true;
+    logEvent("no se pudo conectar a '%s' (estado %d: ¿clave incorrecta?)", ssid.c_str(), WiFi.status());
+    WiFi.disconnect();
+    delay(300);
+  }
+  return false;
+}
+
+void onConnected(const char *como) {
+  MDNS.begin("taxiff-cam");
+  configTzTime("<-05>5", "pool.ntp.org", "time.google.com");  // hora de Ecuador
+  Serial.printf("# WiFi OK: abre http://%s o http://taxiff-cam.local\n", WiFi.localIP().toString().c_str());
+  logEvent("WiFi conectado a %s (%d dBm), IP %s%s", WiFi.SSID().c_str(), WiFi.RSSI(),
+           WiFi.localIP().toString().c_str(), como);
+}
+
+// Red propia "Taxiff-Cam" para configurar la WiFi desde el teléfono (portal
+// cautivo). Si ya hay redes guardadas se cierra sola a los `ms`, para que en
+// el taxi no quede una red visible todo el día; se reabre manteniendo BOOT 3 s.
+void startPortal(uint32_t ms) {
+  apMode = true;
+  portalUntil = millis() + ms;
+  WiFi.mode(WIFI_AP_STA);  // a la vez sigue buscando las redes guardadas
+  WiFi.softAP(AP_SSID, AP_PASS);
+  dns.start(53, "*", WiFi.softAPIP());
+  Serial.printf("# Configurar WiFi: conectate a la red %s (clave %s); la pagina se abre sola\n", AP_SSID, AP_PASS);
+  logEvent("red de configuración '%s' abierta", AP_SSID);
+}
+
+void closePortal() {
+  dns.stop();
+  WiFi.softAPdisconnect(true);
+  apMode = false;
 }
 
 void startWifi() {
-  String ssid = prefs.getString("ssid", ""), pass = prefs.getString("pass", "");
-  if (ssid.length()) {
-    WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
-    // Algunos routers usan WPA (no WPA2); por defecto el ESP32 los ignora.
-    WiFi.setMinSecurity(WIFI_AUTH_WPA_PSK);
-    // Motivo exacto de cada desconexión (código del estándar 802.11).
-    WiFi.onEvent([](WiFiEvent_t e, WiFiEventInfo_t info) {
-      Serial.printf("\n# router rechazo la conexion, motivo %d\n",
-                    info.wifi_sta_disconnected.reason);
-    }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-    // Redes con varios puntos de acceso (malla, 2,4 + 5 GHz): se busca la red
-    // y se conecta al punto de 2,4 GHz con mejor señal. Hasta 3 intentos.
-    for (int attempt = 1; attempt <= 3 && WiFi.status() != WL_CONNECTED; attempt++) {
-      int best = -1;
-      int n = WiFi.scanNetworks();
-      for (int i = 0; i < n; i++) {
-        if (WiFi.SSID(i) == ssid && (best < 0 || WiFi.RSSI(i) > WiFi.RSSI(best))) best = i;
-      }
-      if (best >= 0) {
-        Serial.printf("# Conectando a %s (canal %d, %d dBm, seguridad %d), intento %d", ssid.c_str(),
-                      WiFi.channel(best), WiFi.RSSI(best), (int)WiFi.encryptionType(best), attempt);
-        WiFi.begin(ssid.c_str(), pass.c_str(), WiFi.channel(best), WiFi.BSSID(best));
-      } else {
-        Serial.printf("# %s no aparece en la busqueda, intento %d", ssid.c_str(), attempt);
-        WiFi.begin(ssid.c_str(), pass.c_str());
-      }
-      for (int i = 0; i < 30 && WiFi.status() != WL_CONNECTED; i++) {
-        delay(500);
-        Serial.print(".");
-      }
-      Serial.println();
-      if (WiFi.status() != WL_CONNECTED) {
-        Serial.printf("# intento %d fallido, estado %d\n", attempt, WiFi.status());
-        WiFi.disconnect();
-        delay(500);
-      }
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  // Algunos routers usan WPA (no WPA2); por defecto el ESP32 los ignora.
+  WiFi.setMinSecurity(WIFI_AUTH_WPA_PSK);
+  // Motivo exacto de cada desconexión (código del estándar 802.11).
+  WiFi.onEvent([](WiFiEvent_t e, WiFiEventInfo_t info) {
+    Serial.printf("\n# router rechazo la conexion, motivo %d\n", info.wifi_sta_disconnected.reason);
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  if (loadNetworks().empty()) {
+    logEvent("sin redes WiFi guardadas: esperando configuración");
+    startPortal(0xFFFFFFFF / 2);  // sin redes: queda abierta hasta que se configure
+    return;
+  }
+  for (int attempt = 1; attempt <= 2; attempt++) {
+    if (connectBest(true)) {
+      onConnected("");
+      return;
     }
   }
-  if (WiFi.status() == WL_CONNECTED) {
-    MDNS.begin("taxiff-cam");
-    configTzTime("<-05>5", "pool.ntp.org", "time.google.com");  // hora de Ecuador
-    Serial.printf("# WiFi OK: abre http://%s o http://taxiff-cam.local\n",
-                  WiFi.localIP().toString().c_str());
-    logEvent("WiFi conectado a %s (%d dBm), IP %s", ssid.c_str(), WiFi.RSSI(), WiFi.localIP().toString().c_str());
-  } else {
-    logEvent("no se pudo conectar a '%s' al arrancar (estado %d): sigue intentando cada 30 s", ssid.c_str(), WiFi.status());
-    if (ssid.length()) {
-      // Diagnóstico: por qué no conectó y qué redes ve el ESP32.
-      int st = WiFi.status();
-      Serial.printf("# No conecto a %s. Estado %d (%s)\n", ssid.c_str(), st,
-                    st == WL_NO_SSID_AVAIL ? "no ve la red" :
-                    st == WL_CONNECT_FAILED ? "clave incorrecta o rechazada" :
-                    st == WL_DISCONNECTED ? "desconectado (clave incorrecta?)" : "otro");
-      int n = WiFi.scanNetworks();
-      for (int i = 0; i < n && i < 12; i++) {
-        Serial.printf("#   red: %s  canal %d  %d dBm  %s\n", WiFi.SSID(i).c_str(),
-                      WiFi.channel(i), WiFi.RSSI(i),
-                      WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "abierta" : "con clave");
-      }
-    }
-    apMode = true;
-    // Red propia para configurarla Y, a la vez, sigue intentando la WiFi
-    // guardada (wifiWatchdog): un fallo al arrancar no la deja desconectada.
-    WiFi.mode(ssid.length() ? WIFI_AP_STA : WIFI_AP);
-    WiFi.softAP(AP_SSID, AP_PASS);
-    Serial.printf("# Sin WiFi: conectate a la red %s (clave %s) y abre http://192.168.4.1/wifi\n",
-                  AP_SSID, AP_PASS);
-  }
+  // Ninguna red conocida a la vista (p. ej. en el taxi): sigue grabando en la
+  // SD y reintentando; la red de configuración queda abierta 10 minutos.
+  logEvent("ninguna red guardada disponible al arrancar: graba sin internet y reintenta cada minuto");
+  startPortal(10 * 60 * 1000UL);
 }
 
 // Vigila la WiFi (cada 10 s desde el bucle principal):
-// - si al arrancar no conectó, reintenta la red guardada cada 30 s y, cuando
-//   conecta, apaga la red propia y empieza a enviar;
+// - sin conexión, cada minuto busca las redes guardadas (p. ej. al llegar el
+//   taxi a la casa del dueño) y se conecta a la mejor;
+// - cierra la red de configuración al conectarse o al vencer su tiempo;
 // - anota en el registro cuando se pierde o vuelve la conexión.
 void wifiWatchdog(uint32_t now) {
-  static uint32_t lastTry = 0;
+  static uint32_t lastTry = 0, downSince = 0;
   static int wasConnected = -1;
   bool connected = WiFi.status() == WL_CONNECTED;
   if ((int)connected != wasConnected) {
-    if (wasConnected >= 0) {
-      if (connected) logEvent("WiFi conectado (%d dBm), IP %s", WiFi.RSSI(), WiFi.localIP().toString().c_str());
-      else logEvent("WiFi perdido (estado %d): reconectando", WiFi.status());
-    }
+    if (wasConnected == 1 && !connected) logEvent("WiFi perdido (estado %d): reconectando", WiFi.status());
+    if (wasConnected == 0 && connected) onConnected(" (reconexión)");  // volvió sola
     wasConnected = connected;
   }
-  if (apMode && connected) {
-    apMode = false;
-    WiFi.softAPdisconnect(true);
-    MDNS.begin("taxiff-cam");
-    configTzTime("<-05>5", "pool.ntp.org", "time.google.com");
-    Serial.printf("# WiFi OK (reintento): http://%s\n", WiFi.localIP().toString().c_str());
-    logEvent("conectó en un reintento: apaga la red propia y envía");
+  // La red de configuración se cierra al vencer su tiempo (si hay redes guardadas).
+  if (apMode && (int32_t)(now - portalUntil) > 0 && !loadNetworks().empty()) {
+    closePortal();
+    logEvent("red de configuración cerrada (se reabre manteniendo BOOT 3 s)");
+  }
+  if (connected) {
+    downSince = 0;
     return;
   }
-  if (apMode && !connected && now - lastTry > 30000) {
-    String ssid = prefs.getString("ssid", "");
-    if (!ssid.length()) return;
+  if (!downSince) downSince = now;
+  if (now - downSince > 20000 && now - lastTry > 60000) {
     lastTry = now;
-    WiFi.begin(ssid.c_str(), prefs.getString("pass", "").c_str());
+    if (connectBest(false)) {
+      onConnected(" (encontró una red guardada)");
+      wasConnected = 1;
+    }
   }
 }
 
@@ -1456,6 +1631,7 @@ void setup() {
   // desborda y reinicia la placa. Perder una foto no importa: se silencia.
   esp_log_level_set("cam_hal", ESP_LOG_NONE);
   if (!initCamera()) Serial.println("# ERROR: no se pudo iniciar la camara");
+  pinMode(0, INPUT_PULLUP);  // botón BOOT: mantenerlo 3 s abre la red de configuración
   startWifi();
   startServer();
   startUploader();
@@ -1473,11 +1649,20 @@ void serialCommands() {
       int tab = line.indexOf('\t');
       String ssid = line.substring(5, tab > 0 ? tab : line.length());
       String pass = tab > 0 ? line.substring(tab + 1) : "";
-      prefs.putString("ssid", ssid);
-      prefs.putString("pass", pass);
+      addNetwork(ssid, pass);  // se suma a las que ya conoce
+      logEvent("red WiFi agregada por cable: %s", ssid.c_str());
       Serial.printf("# WiFi guardada: %s. Reiniciando...\n", ssid.c_str());
       delay(500);
       ESP.restart();
+    } else if (line == "REDES") {
+      auto redes = loadNetworks();
+      Serial.printf("# REDES guardadas: %d\n", (int)redes.size());
+      for (auto &r : redes) Serial.printf("#   %s\n", r.ssid.c_str());
+    } else if (line.startsWith("OLVIDAR ")) {
+      removeNetwork(line.substring(8));
+      Serial.printf("# red olvidada: %s\n", line.substring(8).c_str());
+    } else if (line == "PORTAL") {  // igual que mantener BOOT 3 s
+      if (!apMode) startPortal(10 * 60 * 1000UL);
     } else if (line.startsWith("SERVER ")) {
       setServer(line.substring(7));
       Serial.printf("# servidor: %s\n", srvUrl.c_str());
@@ -1594,8 +1779,16 @@ int detectPersons(camera_fb_t *fb, String &boxes) {
 void housekeeping(uint32_t now);
 
 void loop() {
-  static uint32_t lastT = 0;
+  static uint32_t lastT = 0, bootPressed = 0;
   serialCommands();
+  if (apMode) dns.processNextRequest();  // portal cautivo
+  // BOOT mantenido 3 s: abre la red de configuración 10 minutos.
+  if (digitalRead(0) == LOW) {
+    if (!bootPressed) bootPressed = millis();
+    else if (millis() - bootPressed > 3000 && !apMode) startPortal(10 * 60 * 1000UL);
+  } else {
+    bootPressed = 0;
+  }
   if (restartPending) {
     logEvent("reinicio pedido (cambio de resolución)");
     delay(300);  // deja salir la respuesta de /set
@@ -1721,12 +1914,13 @@ void housekeeping(uint32_t now) {
     if (!lastLog || now - lastLog > 60000) {  // estado en el registro cada minuto
       lastLog = now;
       logEvent("estado: %s %d dBm · servidor '%s' · %u enviadas · %u en cola · %.1f fps · %.0f C · RAM %u KB",
-               apMode ? "SIN WiFi (red propia)" : WiFi.status() == WL_CONNECTED ? "WiFi ok" : "WiFi caída",
+               WiFi.status() == WL_CONNECTED ? (apMode ? "WiFi ok + red de configuración" : "WiFi ok")
+                                             : (apMode ? "SIN WiFi (red de configuración abierta)" : "WiFi caída"),
                WiFi.RSSI(), srvState, (unsigned)sentOk, (unsigned)queueSize(), fps, temp,
                (unsigned)(ESP.getFreeHeap() / 1024));
     }
     Serial.printf("# %s · %s · %.1f fps · %.1f C · CPU %d%% · RAM %u KB · %s\n",
-                  apMode ? "AP 192.168.4.1" : WiFi.localIP().toString().c_str(),
+                  WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "AP 192.168.4.1",
                   camFailSince ? "SIN IMAGEN" : "camara ok", fps, temp,
                   (int)busy, ESP.getFreeHeap() / 1024, bootReason.c_str());
   }

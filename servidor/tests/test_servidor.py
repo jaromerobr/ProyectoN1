@@ -362,6 +362,26 @@ def test_filtros_de_fotos(srv):
     assert len(q(f"desde={t0 + 30}&hasta={t0 + 59}")) == 30           # solo la carrera
 
 
+def test_carrera_en_curso_sobrevive_a_un_reinicio_del_servidor(srv, monkeypatch):
+    m, cli, personas = srv
+    tok = registrar(cli)
+    t0 = __import__("time").time() - 600
+    personas.append(PERSONA)
+    for i in range(20):
+        r = enviar(cli, tok, t0 + i)
+    assert r.json()["estado"] == "EN_CARRERA" and r.json()["intervalo_ms"] == m.RITMO_CARRERA_MS
+    # "Reinicio": se borra lo que había en memoria; queda solo lo guardado en la base.
+    m._carreras.clear()
+    for i in range(20, 40):
+        enviar(cli, tok, t0 + i)
+    personas.clear()
+    for i in range(40, 70):
+        r = enviar(cli, tok, t0 + i)
+    assert r.json()["intervalo_ms"] == m.RITMO_VACIO_MS
+    carreras = cli.get("/api/panel/carreras", headers=PANEL).json()
+    assert len(carreras) == 1 and 38 <= carreras[0]["duracion"] <= 41  # una sola carrera, sin cortarse
+
+
 def test_lote_danado_se_rechaza(srv):
     _, cli, _ = srv
     tok = registrar(cli)

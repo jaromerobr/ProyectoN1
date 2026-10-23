@@ -88,6 +88,7 @@ with _db_lock:
         id INTEGER PRIMARY KEY AUTOINCREMENT, dispositivo TEXT, inicio REAL,
         fin REAL, duracion REAL, max_pax INTEGER, valida INTEGER, fotos TEXT);
     CREATE INDEX IF NOT EXISTS carreras_disp ON carreras(dispositivo, inicio);
+    CREATE TABLE IF NOT EXISTS estado_carreras (dispositivo TEXT PRIMARY KEY, datos TEXT);
     CREATE TABLE IF NOT EXISTS eventos (
         id INTEGER PRIMARY KEY AUTOINCREMENT, dispositivo TEXT, recibido REAL,
         origen TEXT, nivel TEXT, texto TEXT);
@@ -276,9 +277,47 @@ class Carrera:
         self.__init__()
         return r
 
+    # El estado se guarda en la base después de cada foto: si el servidor se
+    # reinicia, la carrera en curso sigue donde iba.
+    _CAMPOS = ("estado", "desde", "inicio", "cero_desde", "max", "nivel", "cand", "cand_desde",
+               "distintos", "eventos", "fotos", "ultima_ts", "ultima_con_gente")
+
+    def a_json(self):
+        d = {k: getattr(self, k) for k in self._CAMPOS}
+        d["ultimos"] = list(self.ultimos)
+        return json.dumps(d)
+
+    @classmethod
+    def de_json(cls, texto):
+        c = cls()
+        try:
+            d = json.loads(texto)
+            for k in cls._CAMPOS:
+                if k in d:
+                    setattr(c, k, d[k])
+            c.ultimos.extend(d.get("ultimos", []))
+            c.fotos = [tuple(f) for f in c.fotos]
+        except (ValueError, TypeError):
+            return cls()
+        return c
+
 
 _carreras = {}
 _carreras_lock = threading.Lock()
+
+
+def carrera_de(disp):
+    """Estado de carrera de una cámara: en memoria, o el guardado en la base
+    (después de un reinicio del servidor). Llamar con _carreras_lock tomado."""
+    if disp not in _carreras:
+        fila = db("SELECT datos FROM estado_carreras WHERE dispositivo = ?", (disp,), one=True)
+        _carreras[disp] = Carrera.de_json(fila["datos"]) if fila else Carrera()
+    return _carreras[disp]
+
+
+def guardar_estado(disp, car):
+    db("INSERT INTO estado_carreras (dispositivo, datos) VALUES (?, ?) "
+       "ON CONFLICT(dispositivo) DO UPDATE SET datos = excluded.datos", (disp, car.a_json()))
 
 
 def guardar_carrera(disp, c, anotar=True):
@@ -373,9 +412,10 @@ def procesar_foto(d, datos, ts_camara, conteo):
         {"ts": ts, "dets": dets, "n": n, "n_esp": conteo, "aprox": aprox}))
 
     with _carreras_lock:
-        car = _carreras.setdefault(d["id"], Carrera())
+        car = carrera_de(d["id"])
         cerrada = car.actualizar(ts, n, (ts, rel))
         estado = car.estado
+        guardar_estado(d["id"], car)
     if cerrada:
         guardar_carrera(d["id"], cerrada)
     return rel, n, estado
@@ -404,10 +444,21 @@ AJUSTES_CAMARA = {
 }
 
 
+# Ritmo de fotos que se le pide a la cámara (ms). La cámara además hace una
+# ráfaga de 1 por segundo unos segundos cada vez que su propio conteo cambia.
+RITMO_CAMBIO_MS = 1000    # confirmando una subida o con gente fuera de carrera
+RITMO_CARRERA_MS = 4000   # carrera estable
+RITMO_VACIO_MS = 15000    # cabina vacía (para poder comprobar que de verdad no había nadie)
+
+
 def _respuesta(d, estado, n, conteo, ajustes_ver_camara=-1, **extra):
-    # Ritmo de envío: rápido mientras haya (o pueda haber) pasajeros.
-    rapido = estado != "LIBRE" or n > 0 or conteo > 0
-    r = {"modo": "rapido" if rapido else "lento", "intervalo_ms": 1000 if rapido else 5000,
+    if estado == "CONFIRMANDO" or (estado == "LIBRE" and (n > 0 or conteo > 0)):
+        intervalo = RITMO_CAMBIO_MS
+    elif estado == "EN_CARRERA":
+        intervalo = RITMO_CARRERA_MS
+    else:
+        intervalo = RITMO_VACIO_MS
+    r = {"modo": "lento" if intervalo == RITMO_VACIO_MS else "rapido", "intervalo_ms": intervalo,
          "pasajeros": n, "estado": estado,
          "firmware": firmware_mas_nuevo()[0] or "", **extra}  # la cámara se actualiza si no es la suya
     # Ajustes elegidos en el panel que la cámara todavía no tiene (-1 = firmware viejo).
@@ -545,7 +596,7 @@ def _info_taxi(d):
     d["carreras_hoy"] = db("SELECT COUNT(*) AS n FROM carreras WHERE dispositivo = ? AND inicio >= ? AND valida = 1",
                            (d["id"], hoy), one=True)["n"]
     with _carreras_lock:
-        c = _carreras.get(d["id"])
+        c = carrera_de(d["id"])
         d["carrera_s"] = int(c.ultima_ts - c.inicio) if c and c.estado == "EN_CARRERA" else 0
         d["carrera_max"] = c.max if c and c.estado == "EN_CARRERA" else 0
     return d
@@ -731,6 +782,7 @@ async def reanalizar(disp: str, request: Request):
             if dia == datetime.now().strftime("%Y-%m-%d"):
                 with _carreras_lock:
                     _carreras[disp] = car  # la carrera en curso sigue con el conteo nuevo
+                    guardar_estado(disp, car)
         await run_in_threadpool(aplicar)
     return {"antes": _resumen_carreras(antes), "despues": _resumen_carreras(carreras),
             "fotos": len(fotos), "cambios": len(cambios),
@@ -904,6 +956,7 @@ def _mantenimiento():
             for disp, c in _carreras.items():
                 if c.estado == "EN_CARRERA" and ahora - c.recibida > SIN_FOTOS_S and disp not in con_cola:
                     cerradas.append((disp, c.cerrar(c.ultima_con_gente or c.ultima_ts)))
+                    guardar_estado(disp, c)
         for disp, c in cerradas:
             evento(disp, f"la cámara dejó de enviar {SIN_FOTOS_S // 60} min en plena carrera: se cerró sola", nivel="aviso")
             guardar_carrera(disp, c)
