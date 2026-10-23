@@ -81,6 +81,37 @@ Mientras la red de configuración está abierta, la cámara sigue grabando y sub
 | `.\camara.ps1 olvidar "NOMBRE_RED"` | Borra una red |
 | `.\camara.ps1 portal` | Abre la red `Taxiff-Cam` por 10 minutos |
 
+### Probar en la mesa cómo funciona sin internet
+
+Sirve para comprobar, sin salir de casa, lo que hace la cámara en el taxi:
+
+```powershell
+.\camara.ps1 sinwifi        # se reinicia y graba como si no hubiera WiFi
+.\camara.ps1 mensajes 60    # mira que la "cola" vaya subiendo (fotos guardadas)
+.\camara.ps1 conwifi        # vuelve a la normalidad: se conecta y sube todo
+.\camara.ps1 probarsd       # prueba la tarjeta SD (escribe y lee 1 MB)
+```
+
+La prueba sin WiFi sigue aunque desconectes la cámara, y termina sola a los 3 arranques.
+
+### Si la tarjeta SD falla
+
+- **Al encender:** la cámara intenta 3 veces. Si no la ve, guarda en la memoria interna (unas 600 fotos).
+- **Mientras funciona:** la vuelve a conectar sola. Si no puede, sigue en la memoria interna.
+- **Cuando la tarjeta vuelve:** pasa a la SD lo que guardó en la memoria interna, y se sube igual.
+
+En el registro aparece como "SIN TARJETA SD" o "tarjeta SD montada de nuevo".
+
+### Hora de las fotos tomadas sin internet
+
+La cámara no tiene reloj propio. Si se enciende sin internet, no sabe la hora.
+
+- Anota cuánto dura cada encendido y, cuando vuelve a tener internet, calcula hacia atrás la hora de esas fotos.
+- Las fotos quedan **en orden**, marcadas con **≈** (hora aproximada).
+- Si estuvo apagada un rato entre medio, la hora sale algo más tarde que la real, porque no puede saber cuánto estuvo apagada.
+
+Para que la hora sea siempre exacta hace falta el reloj DS3231.
+
 ### Alimentación: en el auto o en casa
 
 La cámara va en una cajita con un conector USB-C. **No importa de dónde reciba la corriente:**
@@ -197,6 +228,14 @@ Todo queda anotado con fecha y hora:
 En la pestaña **Registro**:
 - Los **errores** salen en rojo y los **avisos** en naranja.
 - Arriba ves cuántos hubo en las últimas 24 horas.
+- **Qué revisar:** lista los problemas de las últimas 24 h con un consejo. Por ejemplo: cortes de corriente, tarjeta SD, servidor caído, clave de WiFi, calor o señal débil. Tocar uno filtra la lista.
+- **Toca cualquier línea** y se abre con:
+  - qué significa;
+  - la posible causa;
+  - qué hacer;
+  - los valores en las líneas de estado (WiFi, cola, temperatura…), con los malos en rojo;
+  - **las fotos de ese momento** (tócalas para verlas grandes);
+  - lo anotado justo antes y después.
 - Puedes filtrar por tipo o buscar una palabra (por ejemplo `ARRANQUE`, `WiFi`, `carrera`).
 
 Para reconocer un problema de corriente: si ves muchos `ARRANQUE: encendido normal` seguidos sin que tú la hayas desconectado, la cámara se está quedando sin corriente (cargador, cable o power bank).

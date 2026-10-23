@@ -181,11 +181,34 @@ canvas { display: block; border-radius: 16px; background: #000; cursor: crosshai
 
 /* Filtros y registro */
 .filtros select, .filtros input { max-width: 100%; }
-.registro { display: grid; gap: 2px; font-size: 13px; }
+.registro { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; font-size: 13px; }
+.registro .linea, .detalle-linea { overflow-wrap: anywhere; }
 .registro .linea { padding: 6px 10px; border-radius: 10px; border-left: 3px solid transparent; }
 .registro .linea.error { background: color-mix(in srgb, var(--bad) 10%, transparent); border-left-color: var(--bad); }
 .registro .linea.aviso { background: var(--warn-bg); border-left-color: var(--warn); }
 .registro .linea .m { margin-right: 6px; white-space: nowrap; }
+#rgLista > .linea { cursor: pointer; }
+#rgLista > .linea:hover, #rgLista > .linea:focus-visible { outline: 1px solid var(--line); outline-offset: -1px; }
+.registro .linea.abierta { outline: 2px solid var(--acc); outline-offset: -2px; }
+
+/* Detalle de una línea del registro */
+.detalle-linea { margin: 4px 0 10px; padding: 12px 14px; border-radius: 16px; background: var(--card-2); font-size: 14px; }
+.detalle-linea p { margin: 4px 0; }
+.detalle-linea .que.error b { color: var(--bad); }
+.detalle-linea .que.aviso b { color: var(--warn); }
+.detalle-linea details { margin-top: 8px; }
+.detalle-linea summary { cursor: pointer; }
+.valores { border-collapse: collapse; margin: 6px 0; font-size: 13px; }
+.valores td { padding: 3px 14px 3px 0; }
+.galeria.mini { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); margin: 6px 0; }
+
+/* Qué revisar (diagnóstico de 24 h) */
+.diagnostico { display: grid; gap: 8px; }
+.bien { color: var(--ok); }
+.problema { text-align: left; font: inherit; color: var(--fg); background: var(--card-2); border: 0; border-left: 4px solid var(--warn);
+  border-radius: 14px; padding: 10px 14px; cursor: pointer; width: 100%; }
+.problema.error { border-left-color: var(--bad); }
+.problema:hover { filter: brightness(0.97); }
 
 /* Ajustes y jaula */
 .form-ajustes { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 12px; margin: 12px 0; }

@@ -202,7 +202,7 @@ void removeNetwork(const String &ssid) {
 // (TX-XXXXXX, de la MAC) y el token que el servidor le da al registrarse.
 // Sin internet, las fotos se guardan en /q y se suben después, las más viejas
 // primero.
-const char *FW_VERSION = "3.6";
+const char *FW_VERSION = "3.7";
 char devId[12];
 String srvUrl, devToken;
 char srvState[64] = "sin servidor configurado";
@@ -225,6 +225,17 @@ volatile bool otaRequested = false, camStopped = false, otaHint = false;
 const uint32_t OTA_CHECK_MS = 3600000;  // cada hora (y 1 min después de arrancar)
 bool apMode = false;
 String bootReason, bootHistory;
+
+// Prueba "sin WiFi" (comando SINWIFI): la cámara arranca como si no viera
+// ninguna de sus redes, para probar en la mesa lo que hace en el taxi. Dura
+// hasta CONWIFI, y como mucho 3 arranques (por si se olvida terminarla).
+bool sinWifi = false;
+
+// Fallos al escribir en la tarjeta (corte breve de corriente, mal contacto):
+// antes se perdían en silencio. Ahora se cuentan, se monta de nuevo la SD y,
+// si no vuelve, se sigue en la memoria interna.
+volatile uint32_t storeErrors = 0;
+void storeFailed(const char *what);
 
 String rstName(int r) {
   switch (r) {
@@ -605,6 +616,7 @@ esp_err_t handleStatus(httpd_req_t *req) {
              ",\"intervalo_ms\":" + String(srvInterval) +
              ",\"fotos_libre_kb\":" + String(freeKB) +
              ",\"almacen\":\"" + (sdOk ? "sd" : fatOk ? "interna" : "ninguno") + "\"" +
+             ",\"errores_memoria\":" + String(storeErrors) + ",\"prueba_sin_wifi\":" + String(sinWifi ? 1 : 0) +
              ",\"sd_gb\":" + String(sdOk ? SD_MMC.cardSize() / 1073741824.0 : 0, 1) +
              ",\"net\":\"" + (WiFi.status() != WL_CONNECTED ? String("Red propia ") + AP_SSID : "WiFi " + WiFi.SSID() + " · " + WiFi.localIP().toString()) +
              "\",\"trips\":[";
@@ -975,7 +987,8 @@ bool handleReply(int code, const String &body, uint32_t count) {
 // Envía una foto en vivo. false si hay que guardarla para después.
 bool postPhoto(const uint8_t *buf, size_t len, uint64_t tsMs, int n) {
   String body;
-  String ts = String((double)tsMs / 1000.0, 3);  // 0 = sin hora: el servidor usa la de llegada
+  // 0 = sin hora: el servidor usa la de llegada. Sin el bit alto (hora estimada, ver TS_APROX).
+  String ts = String((double)(tsMs & 0x7FFFFFFFFFFFFFFFULL) / 1000.0, 3);
   int code = srvPost("/api/v1/foto", "image/jpeg", buf, len, queueSize(), body, ts.c_str(), n);
   return handleReply(code, body, 1);
 }
@@ -1013,6 +1026,77 @@ struct QHdr {
 const uint32_t QMAGIC = 0x32515854;  // "TXQ2"
 uint32_t bootN = 0;
 
+// Hora de las fotos de un arranque sin internet (la cámara no tiene reloj
+// propio). Por cada arranque se guarda cuánto duró y, si llegó a saber la
+// hora, a qué hora empezó. Una foto sin hora del arranque b queda en
+//   inicio(B) - (lo que faltaba de b y la duración de los arranques entre medio)
+// donde B es el primer arranque posterior que sí supo la hora. Supone que se
+// volvió a encender enseguida: si estuvo apagada un rato, la hora sale más
+// tarde que la real, pero el orden de las fotos siempre es el correcto.
+struct BootRec { uint32_t boot, start, dur; };  // start: hora (s) de inicio, 0 = no la supo
+const int BOOT_RECS = 32;
+const uint64_t TS_APROX = 1ULL << 63;  // marca en la hora enviada: es estimada
+
+bool bootRec(uint32_t b, BootRec &r) {
+  char k[8];
+  snprintf(k, sizeof k, "bt%02u", (unsigned)(b % BOOT_RECS));
+  return prefs.getBytes(k, &r, sizeof r) == sizeof r && r.boot == b;
+}
+
+// Cada minuto: duración del arranque actual y, en cuanto se sabe, su hora de inicio.
+void updateBootRec() {
+  BootRec r;
+  if (!bootRec(bootN, r)) r = {bootN, 0, 0};
+  r.dur = millis();
+  time_t t = nowEpoch();
+  if (!r.start && t) r.start = t - millis() / 1000;
+  char k[8];
+  snprintf(k, sizeof k, "bt%02u", (unsigned)(bootN % BOOT_RECS));
+  prefs.putBytes(k, &r, sizeof r);
+}
+
+// Cuánto duró un arranque. La duración se anota cada minuto, así que si se
+// cortó la corriente entre medio queda corta: la última foto de ese arranque
+// en la cola da un dato mejor (se busca una vez por arranque).
+uint32_t bootDuration(uint32_t boot, uint32_t saved) {
+  static uint32_t cBoot = 0, cMs = 0;
+  if (cBoot != boot) {
+    cMs = 0;
+    for (uint32_t s = qHead; s < qTail; s++) {
+      File f = store->open(qPath(s), "r");
+      if (!f) continue;
+      QHdr h = {};
+      bool ok = f.read((uint8_t *)&h, sizeof h) == sizeof h && h.magic == QMAGIC;
+      f.close();
+      if (!ok) continue;
+      if (h.boot == boot) cMs = max(cMs, h.ms);
+      else if (h.boot > boot) break;  // la cola está en orden de arranque
+    }
+    cBoot = boot;
+  }
+  return max(saved, cMs);
+}
+
+// Hora en ms de una foto sin hora (arranque `boot`, `ms` desde que arrancó).
+// Lleva la marca TS_APROX si es estimada; 0 si no hay datos para calcularla.
+uint64_t estimateMs(uint32_t boot, uint32_t ms) {
+  BootRec r;
+  if (!bootRec(boot, r)) return 0;
+  if (r.start) return (uint64_t)r.start * 1000 + ms;  // ese arranque supo la hora después
+  uint32_t dur = bootDuration(boot, r.dur);
+  uint64_t before = dur > ms ? dur - ms : 0;
+  for (uint32_t b = boot + 1; b <= bootN && b < boot + BOOT_RECS; b++) {
+    if (b == bootN) {  // el arranque actual: su inicio se calcula ahora, no del registro de cada minuto
+      uint64_t now = nowMs();
+      return now ? ((now - millis()) - before) | TS_APROX : 0;
+    }
+    if (!bootRec(b, r)) return 0;
+    if (r.start) return ((uint64_t)r.start * 1000 - before) | TS_APROX;
+    before += bootDuration(b, r.dur);
+  }
+  return 0;
+}
+
 // Registro de lo que pasa (arranques, WiFi, estado cada minuto) en
 // /registro.txt de la SD o memoria interna, para revisar después qué pasó
 // mientras la cámara funcionaba sola. Se lee por cable con el comando LOG.
@@ -1024,7 +1108,10 @@ void logEvent(const char *fmt, ...) {
   vsnprintf(msg, sizeof msg, fmt, ap);
   va_end(ap);
   File f = store->open("/registro.txt", "a");
-  if (!f) return;
+  if (!f) {
+    storeFailed("anotar en el registro");
+    if (!storeOk() || !(f = store->open("/registro.txt", "a"))) return;
+  }
   if (f.size() > 256 * 1024) {  // muy largo: se guarda como .old y se empieza otro
     f.close();
     store->remove("/registro.old");
@@ -1107,6 +1194,7 @@ bool readQueued(uint32_t seq, uint8_t *&buf, size_t &len, uint64_t &tsMs, int &n
     tsMs = h.tsMs;
     n = h.n;
     if (!tsMs && h.boot == bootN && nowMs()) tsMs = nowMs() - (millis() - h.ms);
+    else if (!tsMs && h.boot != bootN) tsMs = estimateMs(h.boot, h.ms);
   }
   if (total <= hdr + 2) { f.close(); return false; }
   len = total - hdr;
@@ -1125,7 +1213,16 @@ bool readQueued(uint32_t seq, uint8_t *&buf, size_t &len, uint64_t &tsMs, int &n
 // Guarda una foto en la cola, con su cabecera QHdr delante.
 void enqueuePhoto(const uint8_t *buf, size_t len, uint64_t tsMs, int n) {
   if (!storeOk()) return;
-  // Memoria casi llena: se descartan las fotos más viejas de la cola.
+  // Memoria casi llena: se descartan las fotos más viejas de la cola. Antes se
+  // vuelve a medir: si la tarjeta falló, la medición da 0 y se borraba la cola
+  // entera sin estar llena.
+  if (freeKB < queueMinFreeKB()) {
+    freeKB = measureFreeKB();
+    if (!freeKB) {
+      storeFailed("medir el espacio libre");
+      return;
+    }
+  }
   uint32_t dropped = 0;
   while (freeKB < queueMinFreeKB() && qHead < qTail) {
     queueDropHead();
@@ -1139,11 +1236,19 @@ void enqueuePhoto(const uint8_t *buf, size_t len, uint64_t tsMs, int n) {
     store->mkdir(qDir(qTail));
     f = store->open(path, "w");
   }
-  if (!f) return;
+  if (!f) {
+    storeFailed("guardar una foto");
+    return;
+  }
   QHdr h = {QMAGIC, bootN, tsMs, millis(), n};
-  f.write((const uint8_t *)&h, sizeof h);
-  f.write(buf, len);
+  size_t w = f.write((const uint8_t *)&h, sizeof h);
+  w += f.write(buf, len);
   f.close();
+  if (w != sizeof h + len) {
+    store->remove(path);
+    storeFailed("guardar una foto");
+    return;
+  }
   qTail++;
   freeKB -= min<uint32_t>((uint32_t)freeKB, (uint32_t)(len / 1024 + 1));
 }
@@ -1252,6 +1357,120 @@ void queueInit() {
   qHead = ((uint32_t)minD << 12) + (h < 0x1000 ? h : 0);
   qTail = ((uint32_t)maxD << 12) + (t >= 0 ? t + 1 : 0);
   if (qTail < qHead) qTail = qHead;
+}
+
+void storeFailed(const char *what) {
+  static volatile bool busy = false;
+  static uint32_t lastFix = 0;
+  storeErrors++;
+  if (busy || (lastFix && millis() - lastFix < 10000)) return;
+  busy = true;
+  lastFix = millis();
+  if (sdOk) {
+    SD_MMC.end();
+    delay(200);
+    if (SD_MMC.begin("/sdcard", true, false) && SD_MMC.cardType() != CARD_NONE) {
+      queueInit();  // la cola se vuelve a leer de la tarjeta
+      freeKB = measureFreeKB();
+      Serial.printf("# tarjeta SD montada de nuevo (fallo al %s)\n", what);
+      logEvent("tarjeta SD montada de nuevo tras un fallo al %s", what);
+    } else {
+      sdOk = false;
+      if (fatOk) {
+        store = &FFat;
+        queueInit();
+        freeKB = measureFreeKB();
+      }
+      Serial.printf("# ERROR: la tarjeta SD dejo de responder (%s); se usa la memoria interna\n", what);
+      logEvent("ERROR: la tarjeta SD dejó de responder al %s: se sigue en la memoria interna", what);
+    }
+  }
+  busy = false;
+}
+
+// Si en algún arranque la SD falló y se guardó en la memoria interna, al volver
+// la tarjeta se pasa todo a ella: las fotos al final de la cola (son más nuevas
+// que las que ya estaban) y las líneas del registro.
+void rescueInternal() {
+  if (!sdOk || !fatOk) return;
+  uint32_t moved = 0;
+  std::vector<String> dirs;
+  File root = FFat.open("/q");
+  for (File e = root ? root.openNextFile() : File(); e; e = root.openNextFile())
+    if (e.isDirectory()) dirs.push_back(String("/q/") + String(e.name()).substring(String(e.name()).lastIndexOf('/') + 1));
+  if (root) root.close();
+  std::sort(dirs.begin(), dirs.end());
+  for (auto &d : dirs) {
+    std::vector<String> files;
+    File dir = FFat.open(d);
+    for (File f = dir ? dir.openNextFile() : File(); f; f = dir.openNextFile())
+      files.push_back(d + "/" + String(f.name()).substring(String(f.name()).lastIndexOf('/') + 1));
+    if (dir) dir.close();
+    std::sort(files.begin(), files.end());
+    for (auto &p : files) {
+      File in = FFat.open(p, "r");
+      size_t len = in ? in.size() : 0;
+      uint8_t *buf = len ? (uint8_t *)ps_malloc(len) : nullptr;
+      if (buf && in.read(buf, len) == len) {
+        SD_MMC.mkdir(qDir(qTail));
+        File out = SD_MMC.open(qPath(qTail), "w");
+        if (out && out.write(buf, len) == len) { qTail++; moved++; }
+        if (out) out.close();
+      }
+      if (in) in.close();
+      free(buf);
+      FFat.remove(p);
+    }
+    FFat.rmdir(d);
+  }
+  for (const char *name : {"/registro.txt", "/registro.pend"}) {
+    File in = FFat.open(name, "r");
+    if (!in) continue;
+    File out = SD_MMC.open(name, "a");
+    uint8_t b[512];
+    size_t k;
+    while (out && (k = in.read(b, sizeof b)) > 0) out.write(b, k);
+    if (out) out.close();
+    in.close();
+    FFat.remove(name);
+  }
+  if (moved) logEvent("se pasaron a la SD %u fotos que quedaron en la memoria interna", (unsigned)moved);
+}
+
+// Comando SDTEST: escribe 1 MB en la memoria en uso, lo lee, lo compara byte a
+// byte y mide la velocidad. Para descartar una tarjeta defectuosa.
+void sdSelfTest() {
+  if (!storeOk()) { Serial.println("# SDTEST: no hay memoria disponible"); return; }
+  const size_t CH = 8192, N = 128;
+  uint8_t *b = (uint8_t *)ps_malloc(CH), *r = (uint8_t *)ps_malloc(CH);
+  if (!b || !r) { free(b); free(r); Serial.println("# SDTEST: sin RAM"); return; }
+  bool ok = true;
+  uint32_t t0 = millis();
+  File f = store->open("/sdtest.bin", "w");
+  for (size_t i = 0; f && i < N && ok; i++) {
+    for (size_t k = 0; k < CH; k++) b[k] = (uint8_t)(i * 31 + k * 7);
+    ok = f.write(b, CH) == CH;
+  }
+  if (!f) ok = false;
+  if (f) f.close();
+  uint32_t tw = millis() - t0;
+  t0 = millis();
+  f = ok ? store->open("/sdtest.bin", "r") : File();
+  for (size_t i = 0; f && i < N && ok; i++) {
+    for (size_t k = 0; k < CH; k++) b[k] = (uint8_t)(i * 31 + k * 7);
+    ok = f.read(r, CH) == CH && memcmp(b, r, CH) == 0;
+  }
+  if (!f) ok = false;
+  if (f) f.close();
+  uint32_t tr = millis() - t0;
+  store->remove("/sdtest.bin");
+  free(b);
+  free(r);
+  Serial.printf("# SDTEST %s en %s: escritura %u KB/s, lectura %u KB/s, errores acumulados %u\n",
+                ok ? "OK" : "FALLO", sdOk ? "SD" : "memoria interna", (unsigned)(1024000 / max<uint32_t>(tw, 1)),
+                (unsigned)(1024000 / max<uint32_t>(tr, 1)), (unsigned)storeErrors);
+  logEvent("prueba de memoria (%s): %s, escritura %u KB/s", sdOk ? "SD" : "interna", ok ? "OK" : "FALLO",
+           (unsigned)(1024000 / max<uint32_t>(tw, 1)));
 }
 
 // Descarga el firmware y lo escribe en la otra partición; si todo llega bien,
@@ -1418,8 +1637,11 @@ void uploadTask(void *) {
       sendLogs();
     }
     // Entre foto y foto se va vaciando la cola, de a varias por envío. Si el
-    // servidor no responde se reintenta en 15 s, sin frenar las fotos.
-    if (canSend && queueSize() > 0 && (int32_t)(millis() - retryAt) >= 0 && !sendBatch()) {
+    // servidor no responde se reintenta en 15 s, sin frenar las fotos. Recién
+    // conectada se espera a tener la hora de internet (unos segundos, como
+    // mucho 2 min): con ella se calcula la de las fotos tomadas sin hora.
+    bool clockReady = nowEpoch() || millis() > 120000;
+    if (canSend && clockReady && queueSize() > 0 && (int32_t)(millis() - retryAt) >= 0 && !sendBatch()) {
       retryAt = millis() + 15000;
     }
   }
@@ -1478,6 +1700,7 @@ bool connectBest(bool verbose) {
   for (int i = 0; i < n; i++)
     for (auto &r : redes)
       if (WiFi.SSID(i) == r.ssid) cand.push_back({WiFi.RSSI(i), i});
+  if (sinWifi) cand.clear();  // prueba: como si ninguna estuviera a la vista
   std::sort(cand.begin(), cand.end(), [](const std::pair<int, int> &a, const std::pair<int, int> &b) { return a.first > b.first; });
   if (cand.empty() && verbose) {
     Serial.println("# ninguna red guardada a la vista. Redes visibles:");
@@ -1594,6 +1817,10 @@ void wifiWatchdog(uint32_t now) {
 void setup() {
   Serial.begin(115200);
   delay(1500);
+  // Hora de Ecuador desde el inicio: tras un reinicio por software el reloj
+  // sigue en hora, pero sin esto se mostraba en UTC (5 h adelantada).
+  setenv("TZ", "<-05>5", 1);
+  tzset();
   bootReason = resetReason();
   // Historial de reinicios (sobrevive a los reinicios): para saber si las
   // desconexiones son por falta de corriente (brownout) o por un fallo.
@@ -1602,6 +1829,7 @@ void setup() {
   prefs.putUInt(key.c_str(), prefs.getUInt(key.c_str(), 0) + 1);
   bootN = prefs.getUInt("bootn", 0) + 1;  // para corregir la hora de fotos tomadas sin internet
   prefs.putUInt("bootn", bootN);
+  sinWifi = bootN <= prefs.getUInt("sinw", 0);  // prueba SINWIFI: hasta ese arranque
   bootHistory = "";
   for (int r = 0; r <= 15; r++) {
     uint32_t n = prefs.getUInt((String("rst") + r).c_str(), 0);
@@ -1613,8 +1841,16 @@ void setup() {
   fatOk = FFat.begin(true);
   if (!fatOk) Serial.println("# ERROR: no se pudo abrir la memoria interna");
   // Tarjeta microSD (si hay): modo 1 bit, sin formatear nunca sola.
+  // Con algunos cargadores la tarjeta tarda en estar lista al encender: se
+  // reintenta antes de rendirse y usar la memoria interna.
   SD_MMC.setPins(SD_CLK, SD_CMD, SD_D0);
-  sdOk = SD_MMC.begin("/sdcard", true, false) && SD_MMC.cardType() != CARD_NONE;
+  for (int i = 0; i < 3 && !sdOk; i++) {
+    if (i) {
+      SD_MMC.end();
+      delay(500);
+    }
+    sdOk = SD_MMC.begin("/sdcard", true, false) && SD_MMC.cardType() != CARD_NONE;
+  }
   if (sdOk) {
     store = &SD_MMC;
     Serial.printf("# tarjeta SD: %.1f GB\n", SD_MMC.cardSize() / 1073741824.0);
@@ -1624,12 +1860,20 @@ void setup() {
   if (storeOk()) store->mkdir("/fotos");
   freeKB = measureFreeKB();
   Serial.printf("# espacio libre para fotos: %u MB\n", (unsigned)(freeKB / 1024));
-  logEvent("ARRANQUE: %s · firmware %s · %s", bootReason.c_str(), FW_VERSION, sdOk ? "con tarjeta SD" : "sin SD");
+  logEvent("ARRANQUE: %s · firmware %s · %s", bootReason.c_str(), FW_VERSION,
+           sdOk ? "con tarjeta SD" : "SIN TARJETA SD (guarda en la memoria interna)");
+  if (sinWifi) logEvent("PRUEBA SIN WiFi: actúa como si no viera ninguna red (CONWIFI para terminar)");
   loadConfig();
   // Cuando se pierde una foto (WiFi, escritura en memoria, 640x480) la tarea
   // de la cámara imprime "EV-EOF-OVF" y su pila es tan pequeña que imprimir la
   // desborda y reinicia la placa. Perder una foto no importa: se silencia.
   esp_log_level_set("cam_hal", ESP_LOG_NONE);
+  // Antes de encender la cámara: copiar puede tardar y, con la cámara andando,
+  // nadie leería sus fotos mientras tanto (se desborda y reinicia la placa).
+  if (sdOk) {
+    queueInit();
+    rescueInternal();
+  }
   if (!initCamera()) Serial.println("# ERROR: no se pudo iniciar la camara");
   pinMode(0, INPUT_PULLUP);  // botón BOOT: mantenerlo 3 s abre la red de configuración
   startWifi();
@@ -1663,6 +1907,17 @@ void serialCommands() {
       Serial.printf("# red olvidada: %s\n", line.substring(8).c_str());
     } else if (line == "PORTAL") {  // igual que mantener BOOT 3 s
       if (!apMode) startPortal(10 * 60 * 1000UL);
+    } else if (line == "SINWIFI" || line == "CONWIFI") {
+      bool on = line == "SINWIFI";
+      prefs.putUInt("sinw", on ? bootN + 3 : 0);
+      Serial.printf("# %s. Reiniciando...\n", on ? "Prueba sin WiFi (3 arranques)" : "Fin de la prueba sin WiFi");
+      delay(300);
+      ESP.restart();
+    } else if (line == "SDTEST") {
+      sdSelfTest();
+    } else if (line == "SDFALLA") {  // prueba: la tarjeta deja de responder de golpe
+      Serial.println("# SDFALLA: se desconecta la tarjeta; la siguiente escritura debe recuperarla");
+      SD_MMC.end();
     } else if (line.startsWith("SERVER ")) {
       setServer(line.substring(7));
       Serial.printf("# servidor: %s\n", srvUrl.c_str());
@@ -1913,15 +2168,18 @@ void housekeeping(uint32_t now) {
     static uint32_t lastLog = 0;
     if (!lastLog || now - lastLog > 60000) {  // estado en el registro cada minuto
       lastLog = now;
-      logEvent("estado: %s %d dBm · servidor '%s' · %u enviadas · %u en cola · %.1f fps · %.0f C · RAM %u KB",
+      updateBootRec();
+      logEvent("estado: %s %d dBm · servidor '%s' · %u enviadas · %u en cola (%s, %u errores) · %.1f fps · %.0f C · RAM %u KB",
                WiFi.status() == WL_CONNECTED ? (apMode ? "WiFi ok + red de configuración" : "WiFi ok")
                                              : (apMode ? "SIN WiFi (red de configuración abierta)" : "WiFi caída"),
-               WiFi.RSSI(), srvState, (unsigned)sentOk, (unsigned)queueSize(), fps, temp,
+               WiFi.RSSI(), srvState, (unsigned)sentOk, (unsigned)queueSize(), sdOk ? "SD" : "interna",
+               (unsigned)storeErrors, fps, temp,
                (unsigned)(ESP.getFreeHeap() / 1024));
     }
-    Serial.printf("# %s · %s · %.1f fps · %.1f C · CPU %d%% · RAM %u KB · %s\n",
+    Serial.printf("# %s · %s · %.1f fps · %.1f C · CPU %d%% · RAM %u KB · %s · cola %u en %s (errores %u)\n",
                   WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "AP 192.168.4.1",
                   camFailSince ? "SIN IMAGEN" : "camara ok", fps, temp,
-                  (int)busy, ESP.getFreeHeap() / 1024, bootReason.c_str());
+                  (int)busy, ESP.getFreeHeap() / 1024, bootReason.c_str(), (unsigned)queueSize(),
+                  sdOk ? "SD" : fatOk ? "memoria interna" : "NINGUNA", (unsigned)storeErrors);
   }
 }

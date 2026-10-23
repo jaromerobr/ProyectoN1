@@ -31,6 +31,8 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+import diagnostico
+
 BASE = Path(__file__).resolve().parent
 WEB = BASE / "web"
 
@@ -127,6 +129,12 @@ _PALABRAS_AVISO = ("sin internet", "SIN WiFi", "pendiente", "reintent", "reconec
 
 def nivel_de(texto):
     """error / aviso / info según el contenido de la línea (para colorear y filtrar)."""
+    valores = diagnostico.estado(texto)
+    if valores:  # línea de estado de cada minuto: aviso si algún valor está mal
+        return "aviso" if any(v["mal"] for v in valores) else "info"
+    regla = diagnostico.explicar(texto)  # líneas conocidas: el nivel de su explicación
+    if regla["que"] != "Mensaje informativo.":
+        return regla["gravedad"]
     if any(p.lower() in texto.lower() for p in _PALABRAS_ERROR):
         return "error"
     if "ARRANQUE" in texto and not any(r in texto for r in ("encendido normal", "reinicio por software")):
@@ -385,15 +393,17 @@ async def registro(request: Request):
     return {"token": token, "aprobado": bool(d["aprobado"]) if d else AUTO_APROBAR}
 
 
-def procesar_foto(d, datos, ts_camara, conteo):
+def procesar_foto(d, datos, ts_camara, conteo, estimada=False):
     """Guarda una foto, cuenta pasajeros con YOLO y avanza la carrera del taxi.
     Devuelve (ruta relativa, pasajeros, estado de la carrera)."""
     ahora = time.time()
     # Las fotos guardadas sin internet llegan con la hora en que se tomaron.
-    # Si la cámara no sabía la hora (arrancó sin internet), se usa la de llegada
-    # y la foto queda marcada como "hora aproximada".
-    aprox = not ts_camara or abs(ahora - ts_camara) > MAX_ATRASO_S
-    ts = ahora if aprox else ts_camara
+    # Si la cámara arrancó sin internet la estima a partir de sus arranques
+    # (`estimada`): se respeta, para que queden en orden, pero se marca como
+    # "hora aproximada". Sin ninguna hora se usa la de llegada.
+    valida = bool(ts_camara) and abs(ahora - ts_camara) <= MAX_ATRASO_S
+    aprox = estimada or not valida
+    ts = ts_camara if valida else ahora
     carpeta = FOTOS / d["id"] / datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
     carpeta.mkdir(parents=True, exist_ok=True)
     ruta = carpeta / f"{ts:.3f}.jpg"
@@ -496,7 +506,8 @@ async def lote(request: Request,
                x_ip: str = Header(None)):
     """Varias fotos guardadas sin internet en un solo envío, de la más vieja a la
     más nueva. Cada una: hora en ms (uint64), conteo de la cámara (int32), largo
-    (uint32), todo little-endian, y luego el JPEG."""
+    (uint32), todo little-endian, y luego el JPEG. El bit más alto de la hora
+    indica que la cámara la estimó (arrancó sin internet)."""
     d = dispositivo_auth(x_dispositivo, authorization)
     if not d["aprobado"]:
         return JSONResponse({"error": "pendiente de aprobación", "intervalo_ms": 30000}, 403)
@@ -511,11 +522,12 @@ async def lote(request: Request,
         i += largo
         if len(jpg) != largo or jpg[:2] != b"\xff\xd8":
             raise HTTPException(400, "Lote dañado")
-        fotos.append((ts_ms / 1000, conteo, jpg))
+        estimada = bool(ts_ms >> 63)
+        fotos.append(((ts_ms & ~(1 << 63)) / 1000, conteo, jpg, estimada))
     if not fotos or i != len(datos):
         raise HTTPException(400, "Lote vacío o dañado")
-    for ts, conteo, jpg in fotos:
-        rel, n, estado = await run_in_threadpool(procesar_foto, d, jpg, ts, conteo)
+    for ts, conteo, jpg, estimada in fotos:
+        rel, n, estado = await run_in_threadpool(procesar_foto, d, jpg, ts, conteo, estimada)
     _actualizar_dispositivo(d, rel, n, conteo, estado, len(fotos), x_cola, x_fw, x_rssi, x_temp,
                             x_cfg, x_ajustes_ver if x_ajustes_ver >= 0 else None, x_ip)
     log.info(f"{d['id']} lote de {len(fotos)} fotos guardadas sin internet (quedan {x_cola} en la cámara)")
@@ -816,6 +828,49 @@ def registro_taxi(disp: str, limite: int = 500, nivel: str = "", buscar: str = "
     return {"eventos": filas, "ultimas_24h": resumen}
 
 
+@app.get("/api/panel/taxi/{disp}/registro/diagnostico", dependencies=[Depends(panel_auth)])
+def registro_diagnostico(disp: str, horas: int = 24):
+    """Problemas encontrados en el registro de las últimas `horas`."""
+    filas = db("SELECT recibido, texto FROM eventos WHERE dispositivo = ? AND recibido > ?",
+               (disp, time.time() - min(horas, 24 * 30) * 3600))
+    return {"problemas": diagnostico.problemas(filas), "lineas": len(filas)}
+
+
+def _fotos_cerca(disp, t, cuantas=6):
+    """Las fotos del taxi más cercanas al momento `t` (en orden), para ver qué
+    mostraba la cámara cuando se anotó una línea del registro."""
+    candidatas = []
+    for dia in {datetime.fromtimestamp(t + d).strftime("%Y-%m-%d") for d in (-3600, 0, 3600)}:
+        carpeta = _carpeta_taxi(disp) / dia
+        if carpeta.exists():
+            candidatas += [j for j in carpeta.glob("*.json") if abs(float(j.stem) - t) < 30 * 60]
+    out = []
+    for j in sorted(candidatas, key=lambda j: abs(float(j.stem) - t))[:cuantas]:
+        try:
+            info = json.loads(j.read_text())
+        except (OSError, ValueError):
+            continue
+        if j.with_suffix(".jpg").exists():
+            out.append({"foto": f"{disp}/{j.parent.name}/{j.stem}.jpg", "ts": info["ts"], "n": info.get("n", 0),
+                        "aprox": info.get("aprox", False), "dif_s": round(info["ts"] - t)})
+    return sorted(out, key=lambda f: f["ts"])
+
+
+@app.get("/api/panel/taxi/{disp}/registro/{eid}", dependencies=[Depends(panel_auth)])
+def registro_detalle(disp: str, eid: int):
+    """Una línea del registro explicada: qué significa, qué hacer, sus valores,
+    las fotos de ese momento y las líneas de alrededor."""
+    e = db("SELECT * FROM eventos WHERE dispositivo = ? AND id = ?", (disp, eid), one=True)
+    if not e:
+        raise HTTPException(404)
+    momento, exacta = diagnostico.hora_camara(e["texto"], e["recibido"])
+    alrededor = db("SELECT * FROM eventos WHERE dispositivo = ? AND id BETWEEN ? AND ? ORDER BY id",
+                   (disp, eid - 6, eid + 6))
+    return {"evento": e, "explicacion": diagnostico.explicar(e["texto"]), "valores": diagnostico.estado(e["texto"]),
+            "momento": momento, "hora_exacta": exacta, "fotos": _fotos_cerca(disp, momento),
+            "alrededor": alrededor}
+
+
 @app.get("/api/panel/taxi/{disp}/registro.txt", dependencies=[Depends(panel_auth)])
 def registro_taxi_txt(disp: str):
     """Registro completo de la cámara, para descargarlo."""
@@ -941,9 +996,22 @@ def pagina_taxi(disp: str):
 # ---------------------------------------------------------------- mantenimiento
 
 
+def _renivelar_eventos():
+    """Las líneas de las cámaras ya guardadas se vuelven a clasificar con las reglas
+    actuales (si cambian, el panel no muestra errores que ya no lo son)."""
+    cambios = [(nivel, r["id"]) for r in db("SELECT id, texto, nivel FROM eventos WHERE origen = 'cámara'")
+               if (nivel := nivel_de(r["texto"])) != r["nivel"]]
+    with _db_lock:
+        _db.executemany("UPDATE eventos SET nivel = ? WHERE id = ?", cambios)
+        _db.commit()
+    if cambios:
+        log.info(f"registro: {len(cambios)} líneas reclasificadas con las reglas actuales")
+
+
 def _mantenimiento():
     """Cada minuto cierra carreras de cámaras calladas; cada hora borra fotos viejas
     que no son evidencia de ninguna carrera."""
+    _renivelar_eventos()
     ultima_limpieza = 0
     while True:
         time.sleep(60)

@@ -47,11 +47,17 @@ if ($SoloCompilar) { exit 0 }
 if (-not $Puerto) { $Puerto = [System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object | Select-Object -First 1 }
 if (-not $Puerto) { Write-Host "No hay ninguna cámara conectada por USB (puerto UART)."; exit 1 }
 Write-Host "Cargando en $Puerto..."
+# El firmware va en los dos espacios (0x10000 y 0x310000): si alguna vez el
+# primero queda dañado, la placa arranca el segundo, y antes ahí quedaba una
+# versión vieja de una actualización por internet.
 for ($i = 1; $i -le 3; $i++) {
   $o = & $esptool.FullName --chip esp32s3 --port $Puerto --baud 460800 write_flash -z --flash_mode dio --flash_freq 80m --flash_size 16MB `
     0x0 "$salida\taxiff_cam.ino.bootloader.bin" 0x8000 "$salida\taxiff_cam.ino.partitions.bin" `
-    0xe000 $bootApp0 0x10000 $bin 2>&1
-  if ($o -match "Hash of data verified") { Write-Host "Firmware $version cargado. La cámara se reinicia sola."; exit 0 }
+    0xe000 $bootApp0 0x10000 $bin 0x310000 $bin 2>&1
+  # Cada parte escrita se confirma por separado: tienen que estar las 5. (Antes
+  # bastaba una, y un corte a mitad del firmware se daba por bueno.)
+  $ok = @($o | Select-String "Hash of data verified").Count
+  if ($ok -eq 5) { Write-Host "Firmware $version cargado. La cámara se reinicia sola."; exit 0 }
   Write-Host "  intento $i falló, reintentando..."
   Start-Sleep 3
 }

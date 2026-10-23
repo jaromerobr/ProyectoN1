@@ -107,13 +107,15 @@
       <div><b id="rgAvisos">0</b><span>avisos (24 h)</span></div>
       <div><b id="rgInfo">0</b><span>informativos (24 h)</span></div>
     </div>
+    <div class="card diagnostico" id="rgDiag" hidden></div>
     <div class="fila barra filtros">
       <select id="rgNivel"><option value="">Todo</option><option value="error">Solo errores</option><option value="aviso">Avisos</option><option value="info">Informativos</option></select>
       <input id="rgBuscar" placeholder="Buscar (ej. WiFi, ARRANQUE, carrera)" style="max-width:300px;margin:0">
       <a class="m" id="rgDescargar" target="_blank">Descargar registro completo de la cámara</a>
       <a class="m" href="/api/panel/servidor.log" target="_blank">Descargar registro del servidor</a>
     </div>
-    <div class="card"><div id="rgLista" class="registro"></div>
+    <div class="card"><p class="m" style="margin:0 0 8px">Toca una línea para ver qué significa, qué hacer y la foto de ese momento.</p>
+      <div id="rgLista" class="registro"></div>
       <button id="rgMas" class="fantasma" hidden>Ver más antiguos</button></div>
   </section>
 
@@ -613,13 +615,71 @@ async function cargarRegistro(mas) {
   for (const e of r.eventos) {
     const div = document.createElement('div');
     div.className = 'linea ' + e.nivel;
+    div.tabIndex = 0;
     div.innerHTML = `<span class="m">${new Date(e.recibido * 1000).toLocaleString('es-ES')} ${ORIGEN[e.origen] || ''}</span> ${esc(e.texto)}`;
+    div.onclick = () => abrirLinea(div, e.id);
+    div.onkeydown = ev => { if (ev.key === 'Enter') abrirLinea(div, e.id); };
     $('rgLista').appendChild(div);
   }
   if (r.eventos.length) rgUltimoId = r.eventos[r.eventos.length - 1].id;
   $('rgMas').hidden = r.eventos.length < 300;
   if (!$('rgLista').children.length) $('rgLista').innerHTML = '<p class="m">Sin eventos para este filtro.</p>';
+  if (!mas) cargarDiagnostico();
 }
+
+// Problemas encontrados en las últimas 24 h; tocar uno filtra la lista.
+async function cargarDiagnostico() {
+  const r = await api(`/api/panel/taxi/${id}/registro/diagnostico`);
+  const caja = $('rgDiag');
+  caja.hidden = false;
+  if (!r.problemas.length) {
+    caja.innerHTML = `<b class="bien">✓ Sin problemas en las últimas 24 h</b> <span class="m">(${r.lineas} líneas revisadas)</span>`;
+    return;
+  }
+  caja.innerHTML = `<b>Qué revisar (últimas 24 h)</b>` + r.problemas.map((p, i) =>
+    `<button class="problema ${p.gravedad}" data-i="${i}"><b>${esc(p.titulo)}</b> <span class="m">${p.veces} ${p.veces === 1 ? 'vez' : 'veces'} · última ${new Date(p.ultima * 1000).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span><br>${esc(p.consejo)}</button>`).join('');
+  caja.querySelectorAll('.problema').forEach(b => b.onclick = () => {
+    $('rgBuscar').value = r.problemas[b.dataset.i].buscar;
+    $('rgNivel').value = '';
+    cargarRegistro(false);
+  });
+}
+
+// Detalle de una línea: qué significa, qué hacer, valores, fotos de ese momento
+// y lo que se anotó justo antes y después. Se abre y cierra tocando la línea.
+async function abrirLinea(div, eid) {
+  const abierto = div.nextElementSibling?.classList.contains('detalle-linea');
+  document.querySelectorAll('#rgLista .detalle-linea').forEach(d => d.remove());
+  document.querySelectorAll('#rgLista .linea.abierta').forEach(d => d.classList.remove('abierta'));
+  if (abierto) return;
+  div.classList.add('abierta');
+  const caja = document.createElement('div');
+  caja.className = 'detalle-linea';
+  caja.innerHTML = '<p class="m">Cargando…</p>';
+  div.after(caja);
+  const d = await api(`/api/panel/taxi/${id}/registro/${eid}`);
+  const x = d.explicacion;
+  let html = `<p class="que ${x.gravedad}"><b>${esc(x.que)}</b></p>`;
+  if (x.causa) html += `<p><span class="m">Posible causa:</span> ${esc(x.causa)}</p>`;
+  if (x.hacer) html += `<p><span class="m">Qué hacer:</span> ${esc(x.hacer)}</p>`;
+  if (d.valores) html += '<table class="valores">' + d.valores.map(v =>
+    `<tr><td class="m">${esc(v.dato)}</td><td class="${v.mal ? 'mal' : ''}">${esc(v.valor)}${v.mal ? ' ⚠' : ''}</td></tr>`).join('') + '</table>';
+  html += `<p class="m">${d.hora_exacta ? 'Anotado' : 'Recibido (la cámara no sabía la hora)'}: ${new Date(d.momento * 1000).toLocaleString('es-ES')}</p>`;
+  html += d.fotos.length
+    ? `<p><b>Lo que veía la cámara</b> <span class="m">(fotos más cercanas a ese momento)</span></p><div class="galeria mini"></div>`
+    : '<p class="m">No hay fotos guardadas de ese momento (se borran a las 72 h salvo las de carreras, o la cámara no estaba enviando).</p>';
+  html += `<details><summary class="m">Lo anotado justo antes y después</summary><div class="registro">` +
+    d.alrededor.map(e => `<div class="linea ${e.nivel}${e.id === eid ? ' abierta' : ''}"><span class="m">${hora(e.recibido)}</span> ${esc(e.texto)}</div>`).join('') +
+    '</div></details>';
+  caja.innerHTML = html;
+  const gal = caja.querySelector('.galeria');
+  d.fotos.forEach((f, i) => {
+    const a = miniatura(f, i, d.fotos);
+    a.querySelector('span').textContent += ` · ${f.dif_s >= 0 ? '+' : ''}${durCorta(f.dif_s)}`;
+    gal.appendChild(a);
+  });
+}
+const durCorta = s => Math.abs(s) < 90 ? `${s} s` : `${Math.round(s / 60)} min`;
 $('rgNivel').onchange = () => cargarRegistro(false);
 let rgEspera;
 $('rgBuscar').oninput = () => { clearTimeout(rgEspera); rgEspera = setTimeout(() => cargarRegistro(false), 300); };

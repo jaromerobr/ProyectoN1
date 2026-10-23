@@ -330,14 +330,43 @@ def test_registro_de_la_camara_llega_al_panel(srv):
     por_texto = {e["texto"]: e["nivel"] for e in reg["eventos"]}
     assert por_texto[texto.splitlines()[0]] == "error"   # arrancó por un cuelgue
     assert por_texto[texto.splitlines()[1]] == "info"
-    assert por_texto[texto.splitlines()[2]] == "error"   # perdió la WiFi
+    assert por_texto[texto.splitlines()[2]] == "aviso"   # perdió la WiFi (normal en el taxi)
     assert any("registrada" in e["texto"] for e in reg["eventos"])  # evento del servidor
     errores = cli.get("/api/panel/taxi/TX-000001/registro?nivel=error", headers=PANEL).json()["eventos"]
-    assert len(errores) == 2
+    assert len(errores) == 1
     txt = cli.get("/api/panel/taxi/TX-000001/registro.txt", headers=PANEL)
     assert txt.status_code == 200 and "WiFi perdido" in txt.text
     assert cli.post("/api/v1/eventos", headers={"X-Dispositivo": "TX-000001", "Authorization": "Bearer x"},
                     content=b"hola").status_code == 401
+
+
+def test_linea_del_registro_explicada_con_fotos_y_contexto(srv):
+    """Al abrir una línea: qué significa, qué hacer, sus valores y las fotos de ese momento."""
+    _, cli, _ = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}"}
+    t = __import__("time").time() - 600
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t + i * 15, 0) for i in range(-3, 4)]))
+    hora = __import__("datetime").datetime.fromtimestamp(t).strftime("%d/%m %H:%M:%S")
+    texto = (f"{hora} [arranque 9] ARRANQUE: encendido normal · firmware 3.7 · SIN TARJETA SD (guarda en la memoria interna)\n"
+             f"{hora} [arranque 9] estado: WiFi ok -82 dBm · servidor 'conectada' · 5 enviadas · 0 en cola (interna, 2 errores)"
+             f" · 2.1 fps · 58 C · RAM 150 KB\n")
+    cli.post("/api/v1/eventos", headers=h, content=texto.encode())
+    reg = cli.get("/api/panel/taxi/TX-000001/registro", headers=PANEL).json()["eventos"]
+    sin_sd = next(e for e in reg if "SIN TARJETA" in e["texto"])
+    assert sin_sd["nivel"] == "error"
+    d = cli.get(f"/api/panel/taxi/TX-000001/registro/{sin_sd['id']}", headers=PANEL).json()
+    assert "tarjeta SD" in d["explicacion"]["que"] and d["explicacion"]["hacer"]
+    assert d["hora_exacta"] and abs(d["momento"] - t) < 2
+    assert len(d["fotos"]) == 6 and min(abs(f["dif_s"]) for f in d["fotos"]) <= 1
+    assert any(e["id"] == sin_sd["id"] for e in d["alrededor"])
+    est = next(e for e in reg if "estado:" in e["texto"])
+    valores = {v["dato"]: v for v in cli.get(f"/api/panel/taxi/TX-000001/registro/{est['id']}", headers=PANEL).json()["valores"]}
+    assert valores["WiFi"]["mal"] and valores["Guarda en"]["mal"] and valores["Errores de memoria"]["mal"]
+    assert not valores["Temperatura"]["mal"]
+    diag = cli.get("/api/panel/taxi/TX-000001/registro/diagnostico", headers=PANEL).json()["problemas"]
+    assert diag[0]["titulo"] == "Problemas con la tarjeta SD" and diag[0]["gravedad"] == "error"
+    assert cli.get("/api/panel/taxi/TX-000001/registro/999999", headers=PANEL).status_code == 404
 
 
 def test_filtros_de_fotos(srv):
@@ -387,6 +416,22 @@ def test_lote_danado_se_rechaza(srv):
     tok = registrar(cli)
     h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}"}
     assert cli.post("/api/v1/lote", headers=h, content=lote_bytes([(1, 0)])[:-5]).status_code == 400
+
+
+def test_hora_estimada_por_la_camara_se_respeta_y_queda_aproximada(srv):
+    """Fotos de un arranque sin internet: la cámara estima su hora (bit alto).
+    Quedan en su lugar del día, en orden, y marcadas como aproximadas."""
+    _, cli, _ = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}"}
+    hace_3_h = __import__("time").time() - 3 * 3600
+    datos = b"".join(__import__("struct").pack("<QiI", int((hace_3_h + i) * 1000) | (1 << 63), 0, len(JPEG)) + JPEG
+                     for i in range(5))
+    assert cli.post("/api/v1/lote", headers=h, content=datos).status_code == 200
+    dia = __import__("datetime").datetime.fromtimestamp(hace_3_h).strftime("%Y-%m-%d")
+    fotos = cli.get(f"/api/panel/taxi/TX-000001/fotos?dia={dia}", headers=PANEL).json()
+    assert len(fotos) == 5 and all(f["aprox"] for f in fotos)
+    assert sorted(abs(f["ts"] - hace_3_h) < 6 for f in fotos) == [True] * 5
 
 
 def test_foto_sin_hora_queda_aproximada(srv):

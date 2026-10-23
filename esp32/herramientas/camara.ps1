@@ -8,13 +8,16 @@ Configura y revisa la cámara Taxiff por el cable USB (puerto UART de la placa).
   .\camara.ps1 guardadas                    redes WiFi que tiene guardadas (hasta 5)
   .\camara.ps1 olvidar "NOMBRE_RED"         borra una red guardada
   .\camara.ps1 portal                       abre su red Taxiff-Cam por 10 min (igual que BOOT 3 s)
+  .\camara.ps1 probarsd                     prueba la tarjeta SD (escribe y lee 1 MB)
+  .\camara.ps1 sinwifi                      prueba: funciona como si no hubiera WiFi (como en el taxi)
+  .\camara.ps1 conwifi                      termina esa prueba
   .\camara.ps1 mensajes 30                  lo que va diciendo durante 30 s
   .\camara.ps1 registro                     qué pasó mientras funcionaba sola (arranques, WiFi, estado)
 
 Opcional: -Puerto COM5 (si no, usa el primer puerto que encuentre).
 #>
 param(
-  [Parameter(Position = 0)][ValidateSet("ip", "wifi", "servidor", "redes", "guardadas", "olvidar", "portal", "mensajes", "registro")][string]$Accion = "ip",
+  [Parameter(Position = 0)][ValidateSet("ip", "wifi", "servidor", "redes", "guardadas", "olvidar", "portal", "probarsd", "sinwifi", "conwifi", "mensajes", "registro")][string]$Accion = "ip",
   [Parameter(Position = 1)][string]$Valor1 = "",
   [Parameter(Position = 2)][string]$Valor2 = "",
   [string]$Puerto = ""
@@ -151,6 +154,25 @@ try {
         Write-Host "Red de configuración abierta por 10 minutos."
         Write-Host "En el celular: conéctate a Taxiff-Cam (clave taxiff123) y la página se abre sola."
       } else { Write-Host "La cámara no confirmó (quizás ya estaba abierta). Mira con .\camara.ps1 mensajes 10" }
+    }
+
+    "probarsd" {
+      Write-Host "Probando la memoria (unos segundos)..."
+      $port.Write("SDTEST`n")
+      $t = Leer 30 "SDTEST (OK|FALLO)[^\n]*\n"
+      if ($t -match "# (SDTEST [^\r\n]*)") { Write-Host $Matches[1] }
+      else { Write-Host "La cámara no respondió. Repite en 1 minuto." }
+    }
+
+    { $_ -in "sinwifi", "conwifi" } {
+      $port.Write("$($Accion.ToUpper())`n")
+      $t = Leer 6 "Reiniciando"
+      if ($t -notmatch "Reiniciando") { Write-Host "La cámara no confirmó. Repite en 1 minuto."; exit 1 }
+      if ($Accion -eq "sinwifi") {
+        Write-Host "Prueba sin WiFi: la cámara se reinicia y graba como en el taxi (sin internet)."
+        Write-Host "Sigue así aunque la desconectes (hasta 3 arranques). Mírala con: .\camara.ps1 mensajes 60"
+        Write-Host "Para terminar: .\camara.ps1 conwifi"
+      } else { Write-Host "Prueba terminada: se reinicia, se conecta y sube lo grabado." }
     }
 
     "registro" {
