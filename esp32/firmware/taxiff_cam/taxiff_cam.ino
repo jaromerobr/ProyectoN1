@@ -29,10 +29,16 @@
 #include "human_face_detect_mnp01.hpp"
 #include <taxiff-cabezas-v2_inferencing.h>
 #include "time.h"
+#include "mbedtls/aes.h"
+#include "mbedtls/base64.h"
+#include "lwip/sockets.h"
+// CLAVE_ADMIN: la crea cargar_firmware.ps1 la primera vez (no se sube a GitHub).
+#include "secretos.h"
 
 // Va aquí arriba porque Arduino coloca los prototipos de las funciones antes
 // del resto del código, y algunas usan este tipo.
 struct Red { String ssid, pass; };  // una red WiFi guardada
+struct BootRec { uint32_t boot, start, dur; };  // un arranque; start: hora (s) de inicio, 0 = no la supo
 
 // ---- Pines de cámara (ESP32-S3-EYE / Freenove S3 CAM) ----------------------
 #define XCLK_GPIO_NUM 15
@@ -202,7 +208,7 @@ void removeNetwork(const String &ssid) {
 // (TX-XXXXXX, de la MAC) y el token que el servidor le da al registrarse.
 // Sin internet, las fotos se guardan en /q y se suben después, las más viejas
 // primero.
-const char *FW_VERSION = "3.7";
+const char *FW_VERSION = "3.9";
 char devId[12];
 String srvUrl, devToken;
 char srvState[64] = "sin servidor configurado";
@@ -433,47 +439,152 @@ fetch('/status').then(r=>r.json()).then(d=>{for(const k of KS)$(k).value=k=='pth
 frame();info();
 </script></body></html>)HTML";
 
-// Página para elegir la WiFi desde el teléfono. Se abre sola al conectarse a la
-// red "Taxiff-Cam" (portal cautivo) o en http://<ip-de-la-cámara>/wifi.
+// Página para elegir la WiFi desde el teléfono (lo único que puede hacer el
+// dueño). Se abre sola al conectarse a la red "Taxiff-Cam" (portal cautivo).
+// Ojo: sin "//" en este texto (el preprocesador de Arduino lo corta).
 static const char SETUP_PAGE[] PROGMEM = R"HTML(<!doctype html><html lang="es"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Taxiff · WiFi</title>
-<style>:root{--bg:#f2f2f4;--card:#fff;--fg:#111114;--m:#6f6f76;--acc:#0a6cff}
-@media(prefers-color-scheme:dark){:root{--bg:#000;--card:#1a1a1c;--fg:#f4f4f6;--m:#9b9ba3;--acc:#3e91ff}}
-body{font:15px system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:460px;margin:auto}
-h2{margin:8px 0 4px}.m{color:var(--m);font-size:13px}a{color:var(--acc)}
-.card{background:var(--card);border-radius:22px;padding:14px 16px;margin:12px 0}
-.red{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px 4px;border-bottom:1px solid #8883;cursor:pointer}
-.red:last-child{border:0}
-input,button{width:100%;box-sizing:border-box;padding:13px;margin:6px 0;border-radius:14px;border:1px solid #8884;background:var(--bg);color:var(--fg);font-size:16px}
-button{background:var(--acc);color:#fff;border:0;font-weight:700}
-.quitar{width:auto;padding:7px 14px;margin:0;background:#8882;color:var(--fg)}</style></head><body>
-<h2>Taxiff · WiFi</h2>
-<p class="m">Elige la WiFi de tu casa o el hotspot de tu teléfono (2,4 GHz). La cámara recuerda varias redes y se conecta sola a la que encuentre para subir las fotos.</p>
-<div class="card"><b>Redes que ve la cámara</b><div id="vis" class="m">Buscando redes…</div></div>
-<form class="card" method="POST" action="/save"><b>Conectar a una red</b>
-<input id="s" name="s" placeholder="Nombre de la red" required>
-<input id="p" name="p" type="password" placeholder="Contraseña">
-<label class="m"><input type="checkbox" style="width:auto;margin:0 6px 0 0" onclick="p.type=this.checked?'text':'password'">mostrar contraseña</label>
-<button>Guardar y conectar</button></form>
-<div class="card"><b>Redes guardadas</b><div id="gua" class="m">…</div></div>
-<p class="m"><a href="/">Ver la cámara</a></p>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Taxiff · WiFi</title>
+<style>
+:root{--bg:#f2f2f4;--card:#fff;--c2:#f0f0f3;--fg:#111114;--m:#6f6f76;--acc:#0a6cff;--ok:#1f9d55;--okbg:#dff3e6;--bad:#e5352b;--badbg:#fde4e2;--lin:#e4e4e8}
+@media(prefers-color-scheme:dark){:root{--bg:#000;--card:#1a1a1c;--c2:#252528;--fg:#f4f4f6;--m:#9b9ba3;--acc:#3e91ff;--ok:#3ddc84;--okbg:#173a26;--bad:#ff5a50;--badbg:#3d1714;--lin:#2c2c30}}
+*{box-sizing:border-box}
+body{margin:0;font:16px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--fg);-webkit-tap-highlight-color:transparent}
+main{max-width:460px;margin:0 auto;padding:22px 16px 40px}
+.marca{display:flex;align-items:center;gap:12px;margin:6px 4px 18px}
+.logo{width:44px;height:44px;border-radius:14px;background:var(--acc);display:grid;place-items:center;color:#fff;flex:none}
+h1{font-size:22px;margin:0}.m{color:var(--m);font-size:14px}
+.card{background:var(--card);border-radius:24px;padding:6px 16px;margin:12px 0}
+.tit{display:flex;justify-content:space-between;align-items:center;padding:12px 0 6px;font-weight:700}
+.tit button{all:unset;color:var(--acc);font-size:14px;font-weight:600;cursor:pointer;padding:4px 2px}
+.red{display:flex;align-items:center;gap:12px;padding:13px 0;border-top:1px solid var(--lin);cursor:pointer}
+.red:first-of-type{border-top:0}
+.red .nom{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip{font-size:12px;font-weight:600;padding:3px 9px;border-radius:99px;background:var(--c2);color:var(--m)}
+.chip.ok{background:var(--okbg);color:var(--ok)}
+.sk{height:20px;border-radius:8px;margin:16px 0;background:linear-gradient(100deg,var(--c2) 30%,var(--lin) 50%,var(--c2) 70%);background-size:300% 100%;animation:br 1.3s linear infinite}
+@keyframes br{from{background-position:100% 0}to{background-position:0 0}}
+.aviso{border-radius:18px;padding:12px 14px;margin:12px 0;font-size:15px;display:none}
+.aviso.ok{display:block;background:var(--okbg);color:var(--ok)}.aviso.mal{display:block;background:var(--badbg);color:var(--bad)}
+.hoja{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-end;justify-content:center;z-index:5}
+.hoja.ver{display:flex}
+.panel{background:var(--card);width:100%;max-width:460px;border-radius:28px 28px 0 0;padding:20px 18px calc(22px + env(safe-area-inset-bottom));animation:sube .22s ease-out}
+@keyframes sube{from{transform:translateY(40px);opacity:.4}}
+label{display:block;font-size:14px;color:var(--m);margin:12px 4px 6px}
+.campo{position:relative}
+input{width:100%;padding:15px 16px;border-radius:16px;border:1.5px solid var(--lin);background:var(--c2);color:var(--fg);font-size:17px;outline:none}
+input:focus{border-color:var(--acc)}
+.ojo{all:unset;cursor:pointer;color:var(--m);font-size:14px;font-weight:600;padding:8px}
+.campo .ojo{position:absolute;right:10px;top:9px}
+.btn{display:block;width:100%;border:0;border-radius:999px;padding:16px;margin-top:16px;font-size:17px;font-weight:700;background:var(--acc);color:#fff;cursor:pointer}
+.btn.sec{background:var(--c2);color:var(--fg)}
+.btn:disabled{opacity:.6}
+.quitar{all:unset;color:var(--bad);font-size:14px;font-weight:600;cursor:pointer;padding:6px 2px}
+.listo{text-align:center;padding:40px 10px}
+.check{width:84px;height:84px;border-radius:50%;background:var(--okbg);color:var(--ok);display:grid;place-items:center;margin:0 auto 18px;animation:pop .35s ease-out}
+@keyframes pop{from{transform:scale(.6);opacity:0}}
+.giro{width:20px;height:20px;border-radius:50%;border:3px solid rgba(255,255,255,.4);border-top-color:#fff;display:inline-block;vertical-align:-4px;margin-right:8px;animation:g .8s linear infinite}
+@keyframes g{to{transform:rotate(360deg)}}
+.tips{font-size:13px;color:var(--m);padding:4px 6px;line-height:1.5}
+@media(prefers-reduced-motion:reduce){*{animation:none!important}}
+</style></head><body><main id="app">
+<div class="marca"><div class="logo"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8.5a15 15 0 0 1 20 0"/><path d="M5 12a10 10 0 0 1 14 0"/><path d="M8.5 15.5a5 5 0 0 1 7 0"/><circle cx="12" cy="19" r="1.2" fill="currentColor"/></svg></div>
+<div><h1>Conectar la cámara</h1><div class="m">Taxiff · elige la WiFi para subir las fotos</div></div></div>
+<div id="aviso" class="aviso"></div>
+<div class="card"><div class="tit">Redes disponibles<button id="otra">Actualizar</button></div><div id="vis"><div class="sk"></div><div class="sk"></div><div class="sk"></div></div></div>
+<div class="card"><div class="tit">Redes guardadas</div><div id="gua"><div class="sk"></div></div></div>
+<p class="tips">La cámara recuerda varias redes y se conecta sola a la que encuentre. Solo funciona con redes de <b>2,4 GHz</b>: si usas el hotspot del celular, actívalo en 2,4 GHz (o "máxima compatibilidad").<br><a href="#" id="manual" style="color:var(--acc)">Mi red no aparece</a></p>
+</main>
+<div class="hoja" id="hoja"><form class="panel" id="form">
+<div class="m">Conectar a</div><h1 id="hNom" style="margin:2px 0 6px;overflow-wrap:anywhere"></h1>
+<div id="hSsid" style="display:none"><label for="s">Nombre de la red</label><input id="s" autocomplete="off" autocapitalize="none"></div>
+<label for="p">Contraseña</label><div class="campo"><input id="p" type="password" autocomplete="current-password"><button type="button" class="ojo" id="ojo">Mostrar</button></div>
+<button class="btn" id="ok">Conectar</button><button type="button" class="btn sec" id="cancelar">Cancelar</button>
+</form></div>
 <script>
+const $=i=>document.getElementById(i);
 const esc=t=>String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const barras=r=>r>-55?'▂▄▆█':r>-67?'▂▄▆':r>-75?'▂▄':'▂';
-const elegir=n=>{s.value=n;p.focus();};
+const senal=r=>{const n=r>-55?4:r>-67?3:r>-75?2:1;return '<svg width="22" height="18" viewBox="0 0 22 18">'+[0,1,2,3].map(i=>'<rect x="'+(i*5+1)+'" y="'+(14-i*4)+'" width="3.4" height="'+(4+i*4)+'" rx="1.2" fill="'+(i<n?'var(--acc)':'var(--lin)')+'"/>').join('')+'</svg>'};
+let red='';
+const abrir=(n,manual)=>{red=n;$('hNom').textContent=manual?'otra red':n;$('hSsid').style.display=manual?'block':'none';$('p').value='';$('hoja').classList.add('ver');setTimeout(()=>(manual?$('s'):$('p')).focus(),250)};
+const cerrar=()=>$('hoja').classList.remove('ver');
+const cargar=()=>{$('vis').innerHTML='<div class="sk"></div><div class="sk"></div><div class="sk"></div>';
 fetch('/redes').then(r=>r.json()).then(d=>{
- vis.innerHTML=d.visibles.length?d.visibles.map((n,i)=>`<div class="red" data-i="${i}"><span>${esc(n.ssid)}${d.guardadas.includes(n.ssid)?' · <b>guardada</b>':''}</span><span>${barras(n.rssi)}</span></div>`).join(''):'No encontró redes de 2,4 GHz. Acércala al router.';
- vis.querySelectorAll('.red').forEach(el=>el.onclick=()=>elegir(d.visibles[el.dataset.i].ssid));
- gua.innerHTML=d.guardadas.length?d.guardadas.map(g=>`<div class="red"><span>${esc(g)}${g===d.conectada?' · <b>conectada</b>':''}</span><form method="POST" action="/wifi_borrar" style="margin:0"><input type="hidden" name="s" value="${esc(g)}"><button class="quitar">Quitar</button></form></div>`).join(''):'Ninguna todavía.';
-});
+const a=$('aviso');a.className='aviso';
+if(d.conectada){a.className='aviso ok';a.textContent='Conectada a '+d.conectada+'. Todo listo.'}
+else if(d.ultimo_mal){a.className='aviso mal';a.textContent='No se pudo conectar a '+d.ultimo_mal+'. Revisa la contraseña y vuelve a intentarlo.'}
+$('vis').innerHTML=d.visibles.length?d.visibles.map((n,i)=>'<div class="red" data-i="'+i+'">'+senal(n.rssi)+'<span class="nom">'+esc(n.ssid)+'</span>'+(n.ssid===d.conectada?'<span class="chip ok">Conectada</span>':d.guardadas.includes(n.ssid)?'<span class="chip">Guardada</span>':'')+'</div>').join(''):'<p class="m">No encontró redes de 2,4 GHz. Acerca la cámara al router.</p>';
+$('vis').querySelectorAll('.red').forEach(el=>el.onclick=()=>abrir(d.visibles[el.dataset.i].ssid));
+$('gua').innerHTML=d.guardadas.length?d.guardadas.map((g,i)=>'<div class="red" style="cursor:default"><span class="nom">'+esc(g)+'</span><button class="quitar" data-i="'+i+'">Quitar</button></div>').join(''):'<p class="m">Ninguna todavía.</p>';
+$('gua').querySelectorAll('.quitar').forEach(b=>b.onclick=()=>{const g=d.guardadas[b.dataset.i];if(confirm('¿Olvidar la red '+g+'?'))fetch('/wifi_borrar',{method:'POST',body:'s='+encodeURIComponent(g)}).then(cargar)});
+}).catch(()=>{$('vis').innerHTML='<p class="m">No se pudo buscar. Toca Actualizar.</p>'})};
+$('otra').onclick=cargar;$('cancelar').onclick=cerrar;
+$('manual').onclick=e=>{e.preventDefault();abrir('',true)};
+$('ojo').onclick=()=>{const p=$('p');p.type=p.type==='password'?'text':'password';$('ojo').textContent=p.type==='password'?'Mostrar':'Ocultar'};
+$('form').onsubmit=e=>{e.preventDefault();const n=red||$('s').value.trim();if(!n)return;
+$('ok').disabled=true;$('ok').innerHTML='<span class="giro"></span>Guardando…';
+const fin=()=>{cerrar();$('app').innerHTML='<div class="listo"><div class="check"><svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div><h1>Guardado</h1><p>La cámara se reinicia y se conecta a <b>'+esc(n)+'</b>.</p><p class="m">Ya puedes volver a tu WiFi de siempre.<br>Si la contraseña estaba mal, la red <b>Taxiff-Cam</b> vuelve a aparecer en un minuto para corregirla.</p></div>'};
+fetch('/save',{method:'POST',body:'s='+encodeURIComponent(n)+'&p='+encodeURIComponent($('p').value)}).then(fin,fin)};
+cargar();
 </script></body></html>)HTML";
 
+// ---- Quién puede entrar --------------------------------------------------------
+// La página de la cámara (en vivo, ajustes, fotos) es solo para la empresa:
+// usuario "admin" y CLAVE_ADMIN. El dueño del taxi solo puede elegir la WiFi, y
+// solo estando conectado a la red Taxiff-Cam de la cámara (desde la WiFi de su
+// casa no puede tocar nada).
+String authEsperada;  // "Basic <base64 de admin:clave>"
+
+void initAuth() {
+  String plano = String("admin:") + CLAVE_ADMIN;
+  unsigned char out[160];
+  size_t n = 0;
+  mbedtls_base64_encode(out, sizeof out - 1, &n, (const unsigned char *)plano.c_str(), plano.length());
+  out[n] = 0;
+  authEsperada = String("Basic ") + (const char *)out;
+}
+
+bool esAdmin(httpd_req_t *req) {
+  char h[200];
+  if (httpd_req_get_hdr_value_str(req, "Authorization", h, sizeof h) != ESP_OK) return false;
+  return authEsperada.length() > 6 && authEsperada.equals(h);
+}
+
+// ¿El pedido viene de un teléfono conectado a la red Taxiff-Cam?
+bool desdeRedPropia(httpd_req_t *req) {
+  if (!apMode) return false;
+  struct sockaddr_storage a;
+  socklen_t l = sizeof a;
+  if (getpeername(httpd_req_to_sockfd(req), (struct sockaddr *)&a, &l) != 0) return false;
+  uint32_t ip = 0;
+  if (a.ss_family == AF_INET) ip = ((struct sockaddr_in *)&a)->sin_addr.s_addr;
+  else if (a.ss_family == AF_INET6) memcpy(&ip, &((struct sockaddr_in6 *)&a)->sin6_addr.un.u32_addr[3], 4);
+  uint32_t ap = (uint32_t)WiFi.softAPIP();
+  return (ip & 0x00FFFFFF) == (ap & 0x00FFFFFF);  // misma red 192.168.4.x
+}
+
+// Sin permiso: al teléfono del dueño se le muestra la página de WiFi; al resto se le pide la clave.
+esp_err_t sinAcceso(httpd_req_t *req) {
+  if (desdeRedPropia(req)) {
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "/wifi");
+    return httpd_resp_send(req, nullptr, 0);
+  }
+  httpd_resp_set_status(req, "401 Unauthorized");
+  httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Taxiff\", charset=\"UTF-8\"");
+  httpd_resp_set_type(req, "text/plain; charset=utf-8");
+  return httpd_resp_sendstr(req, "Acceso solo para administradores de Taxiff.");
+}
+#define SOLO_ADMIN() if (!esAdmin(req)) return sinAcceso(req)
+#define SOLO_CONFIGURACION() if (!esAdmin(req) && !desdeRedPropia(req)) return sinAcceso(req)
+
 esp_err_t handlePage(httpd_req_t *req) {
+  SOLO_ADMIN();
   httpd_resp_set_type(req, "text/html");
   return httpd_resp_send(req, PAGE, HTTPD_RESP_USE_STRLEN);
 }
 
 esp_err_t handleSetup(httpd_req_t *req) {
+  SOLO_CONFIGURACION();
   httpd_resp_set_type(req, "text/html");
   return httpd_resp_send(req, SETUP_PAGE, HTTPD_RESP_USE_STRLEN);
 }
@@ -509,28 +620,25 @@ String readForm(httpd_req_t *req) {
 
 // Guarda una red nueva (se suma a las que ya conoce) y reinicia para conectarse.
 esp_err_t handleSave(httpd_req_t *req) {
+  SOLO_CONFIGURACION();
   String body = readForm(req), ssid = formField(body, "s"), pass = formField(body, "p");
   if (!ssid.length()) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Falta el nombre de la red");
   addNetwork(ssid, pass);
   logEvent("red WiFi agregada desde el teléfono: %s", ssid.c_str());
-  httpd_resp_set_type(req, "text/html");
-  String html = String("<meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-                       "<body style='font:17px system-ui;padding:24px;max-width:440px;margin:auto'>"
-                       "<h2>Guardado ✓</h2><p>La cámara se reinicia y se conecta a <b>") + ssid + "</b>.</p>"
-                "<p>En unos segundos empieza a subir las fotos al servidor. Ya puedes volver a tu WiFi.</p></body>";
-  httpd_resp_sendstr(req, html.c_str());
+  httpd_resp_set_type(req, "text/plain; charset=utf-8");
+  httpd_resp_sendstr(req, "ok");  // la página muestra "Guardado"
   delay(1500);
   ESP.restart();
   return ESP_OK;
 }
 
 esp_err_t handleWifiBorrar(httpd_req_t *req) {
+  SOLO_CONFIGURACION();
   String ssid = formField(readForm(req), "s");
   removeNetwork(ssid);
   logEvent("red WiFi quitada: %s", ssid.c_str());
-  httpd_resp_set_status(req, "303 See Other");
-  httpd_resp_set_hdr(req, "Location", "/wifi");
-  return httpd_resp_send(req, nullptr, 0);
+  httpd_resp_set_type(req, "text/plain; charset=utf-8");
+  return httpd_resp_sendstr(req, "ok");
 }
 
 String jsonEsc(const String &s) {
@@ -541,6 +649,7 @@ String jsonEsc(const String &s) {
 
 // /redes: redes que ve la cámara (sin repetir, mejor señal primero) y guardadas.
 esp_err_t handleRedes(httpd_req_t *req) {
+  SOLO_CONFIGURACION();
   int n = WiFi.scanNetworks();
   std::vector<std::pair<int, String>> vis;
   for (int i = 0; i < n; i++) {
@@ -551,7 +660,8 @@ esp_err_t handleRedes(httpd_req_t *req) {
     else it->first = max(it->first, (int)WiFi.RSSI(i));
   }
   std::sort(vis.begin(), vis.end(), [](const std::pair<int, String> &a, const std::pair<int, String> &b) { return a.first > b.first; });
-  String j = "{\"conectada\":\"" + jsonEsc(WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String()) + "\",\"guardadas\":[";
+  String j = "{\"conectada\":\"" + jsonEsc(WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String()) +
+             "\",\"ultimo_mal\":\"" + jsonEsc(prefs.getString("wmal", "")) + "\",\"guardadas\":[";
   auto redes = loadNetworks();
   for (size_t i = 0; i < redes.size(); i++) j += String(i ? "," : "") + "\"" + jsonEsc(redes[i].ssid) + "\"";
   j += "],\"visibles\":[";
@@ -566,7 +676,7 @@ esp_err_t handleRedes(httpd_req_t *req) {
 // teléfono (las pruebas de "¿hay internet?") se manda a la página de WiFi,
 // y el teléfono la abre solo.
 esp_err_t handleNotFound(httpd_req_t *req, httpd_err_code_t err) {
-  if (apMode) {
+  if (desdeRedPropia(req)) {
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/wifi");
     return httpd_resp_send(req, nullptr, 0);
@@ -576,6 +686,7 @@ esp_err_t handleNotFound(httpd_req_t *req, httpd_err_code_t err) {
 }
 
 esp_err_t handleFrame(httpd_req_t *req) {
+  SOLO_ADMIN();
   xSemaphoreTake(lock, portMAX_DELAY);
   if (!lastJpg) {
     xSemaphoreGive(lock);
@@ -596,6 +707,7 @@ esp_err_t handleFrame(httpd_req_t *req) {
 }
 
 esp_err_t handleStatus(httpd_req_t *req) {
+  SOLO_ADMIN();
   String j = "{\"cfg\":" + cfgJson() + ",\"boot\":\"" + bootReason + "\",\"hist\":\"" + bootHistory + "\",\"up\":" + String(millis() / 1000) +
              ",\"heap\":" + String(ESP.getFreeHeap() / 1024) +
              ",\"psram\":" + String(ESP.getFreePsram() / 1024) +
@@ -746,6 +858,7 @@ void applySettings(const char *q) {
 
 // /set?fs=qvga&q=60&night=1… (ver applySettings); además srv=<servidor> y capnow=1.
 esp_err_t handleSet(httpd_req_t *req) {
+  SOLO_ADMIN();
   char q[400] = {0}, v[16], sv[300];
   if (httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK) {
     // srv=<dirección del servidor> (vacía = no enviar).
@@ -760,6 +873,7 @@ esp_err_t handleSet(httpd_req_t *req) {
 
 // /fotos: lista de fotos guardadas para entrenar, en JSON.
 esp_err_t handlePhotos(httpd_req_t *req) {
+  SOLO_ADMIN();
   String j = "{\"ok\":" + String(storeOk() ? 1 : 0) + ",\"free_kb\":" + String(freeKB) + ",\"files\":[";
   int n = 0;
   if (storeOk()) {
@@ -777,6 +891,7 @@ esp_err_t handlePhotos(httpd_req_t *req) {
 
 // /foto?f=t00001.jpg descarga una; /foto?borrar=todas las borra.
 esp_err_t handlePhoto(httpd_req_t *req) {
+  SOLO_ADMIN();
   char q[64] = {0}, v[40];
   if (!storeOk() || httpd_req_get_url_query_str(req, q, sizeof q) != ESP_OK) return httpd_resp_send_404(req);
   if (httpd_query_key_value(q, "borrar", v, sizeof v) == ESP_OK) {
@@ -1026,6 +1141,34 @@ struct QHdr {
 const uint32_t QMAGIC = 0x32515854;  // "TXQ2"
 uint32_t bootN = 0;
 
+// Las fotos de la cola van cifradas en la tarjeta (AES-128-CTR con una clave
+// propia de cada cámara, guardada en su memoria interna): quien saque la SD
+// no puede verlas. Mismo formato que TXQ2, con otra marca.
+const uint32_t QMAGIC_CIF = 0x33515854;  // "TXQ3"
+uint8_t claveAes[16];
+bool claveLista = false;
+
+// Cifra o descifra (en CTR es la misma operación). Cada foto usa su propio
+// contador, armado con su arranque y su momento (nunca se repite).
+void cifrar(uint8_t *d, size_t len, uint32_t boot, uint32_t ms) {
+  if (!claveLista) {
+    if (prefs.getBytes("aesk", claveAes, 16) != 16) {
+      esp_fill_random(claveAes, 16);
+      prefs.putBytes("aesk", claveAes, 16);
+    }
+    claveLista = true;
+  }
+  mbedtls_aes_context ctx;
+  mbedtls_aes_init(&ctx);
+  mbedtls_aes_setkey_enc(&ctx, claveAes, 128);
+  uint8_t nonce[16] = {0}, bloque[16];
+  size_t off = 0;
+  memcpy(nonce, &boot, 4);
+  memcpy(nonce + 4, &ms, 4);
+  mbedtls_aes_crypt_ctr(&ctx, len, &off, nonce, bloque, d, d);
+  mbedtls_aes_free(&ctx);
+}
+
 // Hora de las fotos de un arranque sin internet (la cámara no tiene reloj
 // propio). Por cada arranque se guarda cuánto duró y, si llegó a saber la
 // hora, a qué hora empezó. Una foto sin hora del arranque b queda en
@@ -1033,7 +1176,6 @@ uint32_t bootN = 0;
 // donde B es el primer arranque posterior que sí supo la hora. Supone que se
 // volvió a encender enseguida: si estuvo apagada un rato, la hora sale más
 // tarde que la real, pero el orden de las fotos siempre es el correcto.
-struct BootRec { uint32_t boot, start, dur; };  // start: hora (s) de inicio, 0 = no la supo
 const int BOOT_RECS = 32;
 const uint64_t TS_APROX = 1ULL << 63;  // marca en la hora enviada: es estimada
 
@@ -1057,24 +1199,30 @@ void updateBootRec() {
 
 // Cuánto duró un arranque. La duración se anota cada minuto, así que si se
 // cortó la corriente entre medio queda corta: la última foto de ese arranque
-// en la cola da un dato mejor (se busca una vez por arranque).
+// en la cola da un dato mejor. La cola se recorre una sola vez, avanzando
+// junto con la subida (antes se releía entera por cada foto y, con cientos de
+// fotos de varios arranques, la subida quedaba casi detenida).
 uint32_t bootDuration(uint32_t boot, uint32_t saved) {
-  static uint32_t cBoot = 0, cMs = 0;
-  if (cBoot != boot) {
-    cMs = 0;
-    for (uint32_t s = qHead; s < qTail; s++) {
-      File f = store->open(qPath(s), "r");
-      if (!f) continue;
-      QHdr h = {};
-      bool ok = f.read((uint8_t *)&h, sizeof h) == sizeof h && h.magic == QMAGIC;
-      f.close();
-      if (!ok) continue;
-      if (h.boot == boot) cMs = max(cMs, h.ms);
-      else if (h.boot > boot) break;  // la cola está en orden de arranque
-    }
-    cBoot = boot;
+  static std::vector<std::pair<uint32_t, uint32_t>> ultimo;  // (arranque, ms de su última foto)
+  static uint32_t pos = 0;
+  if (pos < qHead) pos = qHead;
+  if (pos > qTail) pos = qTail;  // la cola se vació o se volvió a leer
+  // Se lee hasta ver una foto de un arranque posterior: ahí ya están todas las de `boot`.
+  while (pos < qTail && (ultimo.empty() || ultimo.back().first <= boot)) {
+    File f = store->open(qPath(pos), "r");
+    pos++;
+    if (!f) continue;
+    QHdr h = {};
+    bool ok = f.read((uint8_t *)&h, sizeof h) == sizeof h && (h.magic == QMAGIC || h.magic == QMAGIC_CIF);
+    f.close();
+    if (!ok) continue;
+    if (!ultimo.empty() && ultimo.back().first == h.boot) ultimo.back().second = max(ultimo.back().second, h.ms);
+    else ultimo.push_back({h.boot, h.ms});
+    if (ultimo.size() > 64) ultimo.erase(ultimo.begin());
   }
-  return max(saved, cMs);
+  for (auto &u : ultimo)
+    if (u.first == boot) return max(saved, u.second);
+  return saved;
 }
 
 // Hora en ms de una foto sin hora (arranque `boot`, `ms` desde que arrancó).
@@ -1185,7 +1333,8 @@ bool readQueued(uint32_t seq, uint8_t *&buf, size_t &len, uint64_t &tsMs, int &n
   QHdr h = {};
   size_t hdr = sizeof h;
   if (total < 8 || f.read((uint8_t *)&h, min(total, sizeof h)) < 8) { f.close(); return false; }
-  if (h.magic != QMAGIC) {  // formato anterior: [hora en s][conteo]
+  bool cifrada = h.magic == QMAGIC_CIF;
+  if (h.magic != QMAGIC && !cifrada) {  // formato anterior: [hora en s][conteo]
     uint32_t *old = (uint32_t *)&h;
     tsMs = (uint64_t)old[0] * 1000;
     n = (int32_t)old[1];
@@ -1201,7 +1350,9 @@ bool readQueued(uint32_t seq, uint8_t *&buf, size_t &len, uint64_t &tsMs, int &n
   buf = (uint8_t *)ps_malloc(len);
   if (buf) {
     f.seek(hdr);
-    if (f.read(buf, len) != len || buf[0] != 0xFF || buf[1] != 0xD8) {
+    bool leida = f.read(buf, len) == len;
+    if (leida && cifrada) cifrar(buf, len, h.boot, h.ms);  // descifra
+    if (!leida || buf[0] != 0xFF || buf[1] != 0xD8) {
       free(buf);
       buf = nullptr;
     }
@@ -1240,9 +1391,18 @@ void enqueuePhoto(const uint8_t *buf, size_t len, uint64_t tsMs, int n) {
     storeFailed("guardar una foto");
     return;
   }
-  QHdr h = {QMAGIC, bootN, tsMs, millis(), n};
+  QHdr h = {QMAGIC_CIF, bootN, tsMs, millis(), n};
+  uint8_t *cif = (uint8_t *)ps_malloc(len);
+  if (!cif) {
+    f.close();
+    store->remove(path);
+    return;
+  }
+  memcpy(cif, buf, len);
+  cifrar(cif, len, h.boot, h.ms);
   size_t w = f.write((const uint8_t *)&h, sizeof h);
-  w += f.write(buf, len);
+  w += f.write(cif, len);
+  free(cif);
   f.close();
   if (w != sizeof h + len) {
     store->remove(path);
@@ -1721,6 +1881,7 @@ bool connectBest(bool verbose) {
     if (verbose) Serial.println();
     if (WiFi.status() == WL_CONNECTED) return true;
     logEvent("no se pudo conectar a '%s' (estado %d: ¿clave incorrecta?)", ssid.c_str(), WiFi.status());
+    prefs.putString("wmal", ssid);  // la página de WiFi avisa que revise la clave
     WiFi.disconnect();
     delay(300);
   }
@@ -1728,6 +1889,7 @@ bool connectBest(bool verbose) {
 }
 
 void onConnected(const char *como) {
+  if (prefs.isKey("wmal")) prefs.remove("wmal");
   MDNS.begin("taxiff-cam");
   configTzTime("<-05>5", "pool.ntp.org", "time.google.com");  // hora de Ecuador
   Serial.printf("# WiFi OK: abre http://%s o http://taxiff-cam.local\n", WiFi.localIP().toString().c_str());
@@ -1877,6 +2039,7 @@ void setup() {
   if (!initCamera()) Serial.println("# ERROR: no se pudo iniciar la camara");
   pinMode(0, INPUT_PULLUP);  // botón BOOT: mantenerlo 3 s abre la red de configuración
   startWifi();
+  initAuth();
   startServer();
   startUploader();
 }
@@ -1915,6 +2078,15 @@ void serialCommands() {
       ESP.restart();
     } else if (line == "SDTEST") {
       sdSelfTest();
+    } else if (line == "CLAVESD") {  // solo por cable: para descifrar la tarjeta en una PC (docs/SEGURIDAD.md)
+      uint8_t k[16];
+      if (prefs.getBytes("aesk", k, 16) == 16) {
+        Serial.print("# CLAVESD ");
+        for (int i = 0; i < 16; i++) Serial.printf("%02x", k[i]);
+        Serial.println();
+      } else {
+        Serial.println("# CLAVESD (todavia no hay: se crea con la primera foto guardada)");
+      }
     } else if (line == "SDFALLA") {  // prueba: la tarjeta deja de responder de golpe
       Serial.println("# SDFALLA: se desconecta la tarjeta; la siguiente escritura debe recuperarla");
       SD_MMC.end();

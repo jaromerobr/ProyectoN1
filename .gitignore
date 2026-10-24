@@ -58,6 +58,8 @@ build_esp32/
 /servidor/modelos/
 .pytest_cache/
 __pycache__/
+# Clave de administración de las cámaras (la crea cargar_firmware.ps1)
+/esp32/firmware/taxiff_cam/secretos.h
 # Notas personales
 /RESUMEN_PARA_IAS*.md
 *.mp4

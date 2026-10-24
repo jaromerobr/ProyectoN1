@@ -1,5 +1,12 @@
 # Guía rápida: levantar el servidor y conectar la cámara
 
+> **Otros documentos:**
+> - [CAMBIOS.md](CAMBIOS.md): qué cambió en cada versión.
+> - [SEGURIDAD.md](SEGURIDAD.md): claves, cifrado y quién ve qué.
+> - [DESPLIEGUE.md](DESPLIEGUE.md): pasar el servidor a internet y sus costos.
+>
+> **Desde el firmware 3.9**, la página de la cámara pide **usuario `admin`** y la clave de `esp32/firmware/taxiff_cam/secretos.h`.
+
 Todo se escribe en **PowerShell**. En VS Code: *Terminal → New Terminal*.
 Las rutas son de esta PC (`C:\Users\ASUS Vivobook\Desktop\taxiff`). En otra PC, cámbialas por donde esté el repositorio.
 
@@ -90,6 +97,7 @@ Sirve para comprobar, sin salir de casa, lo que hace la cámara en el taxi:
 .\camara.ps1 mensajes 60    # mira que la "cola" vaya subiendo (fotos guardadas)
 .\camara.ps1 conwifi        # vuelve a la normalidad: se conecta y sube todo
 .\camara.ps1 probarsd       # prueba la tarjeta SD (escribe y lee 1 MB)
+.\camara.ps1 clavesd        # clave de cifrado de la SD (para descifrar_sd.ps1; ver SEGURIDAD.md)
 ```
 
 La prueba sin WiFi sigue aunque desconectes la cámara, y termina sola a los 3 arranques.

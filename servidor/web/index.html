@@ -51,7 +51,8 @@ async function cargar() {
           <div><b>${t.carreras_hoy}</b><span>carreras hoy</span></div>
           <div><b>${t.temp ?? '–'}°</b><span>temp.</span></div>
         </div>
-        <div class="m">${t.en_linea ? 'En línea' : 'Visto ' + hace(t.visto)}${t.rssi ? ' · WiFi ' + t.rssi + ' dBm' : ''}</div>
+        ${conexion(t, true)}
+        <div class="m">${t.rssi ? 'WiFi ' + t.rssi + ' dBm · ' : ''}última foto ${hace(t.visto)}</div>
       </a>`).join('');
     $('carreras').innerHTML = filaCarreraTitulo(true) + carreras.map(c => filaCarrera(c, true)).join('');
     const salud = await api('/api/salud');

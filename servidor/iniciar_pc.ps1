@@ -54,7 +54,13 @@ if ($Tunel) {
 
 if ($Esp -and $publica) {
   try {
-    Invoke-RestMethod "http://$Esp/set?srv=$([uri]::EscapeDataString($publica))" -TimeoutSec 8 | Out-Null
+    # La página de la cámara pide la clave de administración (esp32/firmware/taxiff_cam/secretos.h).
+    $h = @{}
+    $sec = Join-Path $PSScriptRoot "..\esp32\firmware\taxiff_cam\secretos.h"
+    if ((Test-Path $sec) -and ((Get-Content $sec -Raw) -match '#define CLAVE_ADMIN "([^"]+)"')) {
+      $h.Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:" + $Matches[1]))
+    }
+    Invoke-RestMethod "http://$Esp/set?srv=$([uri]::EscapeDataString($publica))" -Headers $h -TimeoutSec 8 | Out-Null
     Write-Host "ESP32 $Esp configurado para enviar a $publica"
   } catch { Write-Host "No se pudo configurar el ESP32 en $Esp ($_)" }
 }

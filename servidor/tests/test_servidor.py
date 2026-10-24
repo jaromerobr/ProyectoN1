@@ -369,6 +369,45 @@ def test_linea_del_registro_explicada_con_fotos_y_contexto(srv):
     assert cli.get("/api/panel/taxi/TX-000001/registro/999999", headers=PANEL).status_code == 404
 
 
+def test_panel_muestra_si_llega_informacion(srv):
+    """Conectada pero sin fotos (solo registro) → recibiendo → subiendo lo guardado."""
+    _, cli, _ = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}"}
+    estado = lambda: cli.get("/api/panel/taxi/TX-000001", headers=PANEL).json()["conexion"]
+    cli.post("/api/v1/eventos", headers={**h, "X-Cola": "1100"}, content=b"hola")
+    c = estado()
+    assert c["estado"] == "sin_fotos" and c["cola"] == 1100 and "1100" in c["detalle"]
+    t = __import__("time").time() - 600
+    cli.post("/api/v1/lote", headers={**h, "X-Cola": "400"}, content=lote_bytes([(t + i, 0) for i in range(5)]))
+    c = estado()
+    assert c["estado"] == "subiendo" and c["cola"] == 400 and c["cola_max"] == 1100 and "400" in c["titulo"]
+    assert c["por_min"] >= 5
+    cli.post("/api/v1/lote", headers={**h, "X-Cola": "0"}, content=lote_bytes([(t + 10, 0)]))
+    assert estado()["estado"] == "recibiendo" and estado()["cola_max"] == 0
+    enviar(cli, tok, 0)
+    assert estado()["estado"] == "recibiendo"
+
+
+def test_fotos_de_tarde_a_temprano(srv):
+    """orden=desc: la última primero; 'ver más' con hasta= sigue hacia atrás sin repetir."""
+    _, cli, personas = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}"}
+    t0 = int(__import__("time").time()) - 3600
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 0) for i in range(10)]))
+    dia = __import__("datetime").datetime.fromtimestamp(t0).strftime("%Y-%m-%d")
+    q = lambda extra: cli.get(f"/api/panel/taxi/TX-000001/fotos?dia={dia}&{extra}", headers=PANEL).json()
+    pag1 = q("orden=desc&limite=4")
+    assert [round(f["ts"]) - t0 for f in pag1] == [9, 8, 7, 6]
+    pag2 = q(f"orden=desc&limite=4&hasta={pag1[-1]['ts'] - 0.0005}")
+    assert [round(f["ts"]) - t0 for f in pag2] == [5, 4, 3, 2]
+    assert [round(f["ts"]) - t0 for f in q("orden=asc&limite=3")] == [0, 1, 2]
+    # "importantes" al revés: la última foto (cómo quedó la cabina) va primero.
+    imp = q("orden=desc&filtro=importantes")
+    assert round(imp[0]["ts"]) - t0 == 9 and round(imp[-1]["ts"]) - t0 == 0
+
+
 def test_filtros_de_fotos(srv):
     """vacía 30 s → 1 pasajero 30 s → vacía 30 s: 'importantes' son los cambios."""
     _, cli, personas = srv

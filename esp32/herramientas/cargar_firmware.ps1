@@ -35,6 +35,23 @@ if (-not (Test-Path "$libs\taxiff-cabezas-v2_inferencing")) {
   Expand-Archive (Join-Path $raiz "esp32\firmware\librerias\ei-taxiff-cabezas-v2-arduino-1.0.1.zip") $libs -Force
 }
 
+# Clave de administración de las cámaras: va en secretos.h, que no se sube a
+# GitHub. La primera vez se crea con una clave al azar.
+$secretos = Join-Path $sketch "secretos.h"
+if (-not (Test-Path $secretos)) {
+  $abc = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789".ToCharArray()
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  $b = New-Object byte[] 14; $rng.GetBytes($b)
+  $clave = -join ($b | ForEach-Object { $abc[$_ % $abc.Length] })
+  # Sin BOM ni acentos: el compilador no acepta la marca BOM de UTF-8.
+  $texto = "// Clave de administracion de las camaras (pagina en vivo, ajustes, fotos).`n" +
+           "// Usuario: admin. NO se sube a GitHub. Guardala en un lugar seguro.`n" +
+           "#define CLAVE_ADMIN `"$clave`"`n"
+  [IO.File]::WriteAllText($secretos, $texto, (New-Object Text.UTF8Encoding $false))
+  Write-Host "Se creó la clave de administración de las cámaras en $secretos"
+  Write-Host "  usuario: admin   clave: $clave"
+}
+
 $version = (Select-String -Path "$sketch\taxiff_cam.ino" -Pattern 'FW_VERSION = "([\d\.]+)"').Matches[0].Groups[1].Value
 Write-Host "Compilando firmware $version (la primera vez tarda varios minutos)..."
 & $cli compile -b $fqbn --output-dir $salida $sketch 2>&1 | Select-String "error|Sketch uses" | ForEach-Object { Write-Host "  $($_.Line)" }

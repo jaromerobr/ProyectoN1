@@ -100,7 +100,8 @@ with _db_lock:
     for tabla, col in (("dispositivos", "cola INTEGER DEFAULT 0"),
                        ("dispositivos", "ajustes TEXT DEFAULT '{}'"), ("dispositivos", "ajustes_ver INTEGER DEFAULT 0"),
                        ("dispositivos", "cfg_camara TEXT"), ("dispositivos", "ajustes_aplicados INTEGER DEFAULT 0"),
-                       ("dispositivos", "ip_local TEXT"),
+                       ("dispositivos", "ip_local TEXT"), ("dispositivos", "contacto REAL"),
+                       ("dispositivos", "cola_max INTEGER DEFAULT 0"),
                        ("carreras", "pasajeros INTEGER"), ("carreras", "eventos TEXT")):
         try:
             _db.execute(f"ALTER TABLE {tabla} ADD COLUMN {col}")
@@ -369,7 +370,35 @@ def dispositivo_auth(id, authorization):
     tok = (authorization or "").removeprefix("Bearer ").strip()
     if not d or not d["token_hash"] or not secrets.compare_digest(d["token_hash"], hash_token(tok)):
         raise HTTPException(401, "Dispositivo o token inválido")
+    # Cualquier contacto cuenta (fotos, registro, buscar firmware): así el panel
+    # distingue "conectada pero sin enviar fotos" de "sin conexión".
+    db("UPDATE dispositivos SET contacto = ? WHERE id = ?", (time.time(), id))
     return d
+
+
+# Llegada de fotos en el último minuto, por cámara (para "recibiendo N fotos/min").
+_llegadas = {}
+
+
+def _anotar_llegadas(disp, n):
+    ahora = time.time()
+    q = _llegadas.setdefault(disp, deque())
+    q.extend([ahora] * n)
+    while q and ahora - q[0] > 60:
+        q.popleft()
+
+
+def _por_minuto(disp):
+    q = _llegadas.get(disp)
+    return sum(1 for t in q if time.time() - t <= 60) if q else 0
+
+
+def _cola_informada(disp, cola):
+    """Fotos que la cámara dice tener guardadas; el máximo de la tanda sirve para la barra de avance."""
+    if cola is None:
+        return
+    db("UPDATE dispositivos SET cola = ?, cola_max = CASE WHEN ? = 0 THEN 0 ELSE MAX(COALESCE(cola_max, 0), ?) END "
+       "WHERE id = ?", (cola, cola, cola, disp))
 
 
 @app.post("/api/v1/registro")
@@ -438,6 +467,8 @@ def _actualizar_dispositivo(d, rel, n, conteo, estado, recibidas, cola, fw, rssi
        "fotos_recibidas = fotos_recibidas + ?, cfg_camara = COALESCE(?, cfg_camara), "
        "ajustes_aplicados = COALESCE(?, ajustes_aplicados), ip_local = COALESCE(?, ip_local) WHERE id = ?",
        (time.time(), fw, rssi, temp, rel, n, conteo, estado, cola, recibidas, cfg, ajustes_ver, ip, d["id"]))
+    _cola_informada(d["id"], cola)
+    _anotar_llegadas(d["id"], recibidas)
 
 
 # Ajustes de la cámara que se pueden cambiar desde el panel, con sus valores válidos.
@@ -534,10 +565,12 @@ async def lote(request: Request,
     return _respuesta(d, estado, n, conteo, x_ajustes_ver, recibidas=len(fotos))
 
 @app.post("/api/v1/eventos")
-async def eventos_camara(request: Request, x_dispositivo: str = Header(...), authorization: str = Header(None)):
+async def eventos_camara(request: Request, x_dispositivo: str = Header(...), authorization: str = Header(None),
+                         x_cola: int = Header(None)):
     """La cámara manda las líneas nuevas de su registro (texto, una por línea).
     Las que escribió sin internet llegan cuando vuelve a conectarse."""
     d = dispositivo_auth(x_dispositivo, authorization)
+    _cola_informada(d["id"], x_cola)
     datos = await request.body()
     if len(datos) > 256_000:
         raise HTTPException(413, "Registro demasiado grande")
@@ -591,12 +624,50 @@ def salud():
 # ---------------------------------------------------------------- panel
 
 
+def _hace(s):
+    s = int(s)
+    if s < 90:
+        return f"{s} s"
+    if s < 5400:
+        return f"{round(s / 60)} min"
+    if s < 172800:
+        return f"{round(s / 3600)} h"
+    return f"{round(s / 86400)} días"
+
+
+def _conexion(d, ahora):
+    """Qué está pasando con la cámara, para mostrarlo en el panel:
+    recibiendo / subiendo (fotos guardadas) / sin_fotos (conectada pero no envía) / sin_conexion."""
+    foto = ahora - d["visto"] if d["visto"] else None
+    contacto = ahora - (d.get("contacto") or d["visto"] or 0) if (d.get("contacto") or d["visto"]) else None
+    cola, cola_max, por_min = d.get("cola") or 0, max(d.get("cola_max") or 0, d.get("cola") or 0), _por_minuto(d["id"])
+    base = {"cola": cola, "cola_max": cola_max, "por_min": por_min,
+            "foto_hace_s": None if foto is None else int(foto), "contacto_hace_s": None if contacto is None else int(contacto)}
+    if foto is not None and foto < 45:
+        if cola > 0:
+            return {**base, "estado": "subiendo", "titulo": f"Subiendo fotos guardadas · quedan {cola}",
+                    "detalle": f"Llegaron {por_min} en el último minuto. Son las que tomó sin internet."}
+        return {**base, "estado": "recibiendo", "titulo": "Recibiendo fotos",
+                "detalle": f"{por_min} en el último minuto · la última hace {_hace(foto)}"}
+    if contacto is not None and contacto < 150:
+        return {**base, "estado": "sin_fotos", "titulo": "Conectada, pero no está enviando fotos",
+                "detalle": (f"La cámara habla con el servidor (hace {_hace(contacto)}) y tiene {cola} fotos guardadas, "
+                            "pero no las sube. Mira la pestaña Registro; si sigue así, reiníciala o conéctala por cable.")
+                if cola else f"La cámara habla con el servidor (hace {_hace(contacto)}) pero no manda fotos. "
+                             "Puede estar arrancando: espera un minuto."}
+    if contacto is None:
+        return {**base, "estado": "sin_conexion", "titulo": "Nunca se conectó", "detalle": ""}
+    return {**base, "estado": "sin_conexion", "titulo": f"Sin conexión desde hace {_hace(contacto)}",
+            "detalle": "Sin internet o apagada. Lo que grabe se subirá cuando vuelva a conectarse."}
+
+
 def _info_taxi(d):
     ahora = time.time()
     hoy = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     d = dict(d)
     d.pop("token_hash", None)
     d["en_linea"] = bool(d["visto"] and ahora - d["visto"] < 30)
+    d["conexion"] = _conexion(d, ahora)
     d["jaula"] = json.loads(d["jaula"] or "[]")
     d["ajustes"] = json.loads(d.get("ajustes") or "{}")
     try:
@@ -650,8 +721,10 @@ def dias_con_fotos(disp: str):
 
 @app.get("/api/panel/taxi/{disp}/fotos", dependencies=[Depends(panel_auth)])
 def fotos_del_dia(disp: str, dia: str, solo_pasajeros: bool = False, limite: int = 400,
-                  desde: float = 0, hasta: float = 0, filtro: str = "", cada: int = 0):
+                  desde: float = 0, hasta: float = 0, filtro: str = "", cada: int = 0, orden: str = "asc"):
     """Fotos de un día en orden de hora, con lo que contó el servidor y la cámara.
+    - `orden`: "asc" de temprano a tarde · "desc" de tarde a temprano (para ver
+      más, pedir con `hasta` = la hora de la última recibida).
     - `desde`/`hasta` (hora en segundos): un rango, p. ej. una carrera.
     - `filtro`: "" todas · "pasajeros" con alguien · "vacias" sin nadie (para
       comprobar que de verdad no había nadie) · "importantes" solo donde cambió
@@ -666,6 +739,16 @@ def fotos_del_dia(disp: str, dia: str, solo_pasajeros: bool = False, limite: int
     carpeta = _carpeta_taxi(disp) / dia
     if not carpeta.exists():
         return []
+    limite = min(limite, 2000)
+    if orden == "desc":
+        # Los filtros se calculan siempre de temprano a tarde (el "cambio" depende
+        # de las fotos anteriores); después se da vuelta y se toman las últimas.
+        todas = _fotos_en_orden(carpeta, disp, dia, desde, hasta, filtro, cada, 10 ** 9)
+        return todas[::-1][:limite]
+    return _fotos_en_orden(carpeta, disp, dia, desde, hasta, filtro, cada, limite)
+
+
+def _fotos_en_orden(carpeta, disp, dia, desde, hasta, filtro, cada, limite):
     # "Cambio" con el mismo suavizado que las carreras (mediana de las 3 últimas
     # fotos): un parpadeo del detector en una sola foto no cuenta.
     out, anterior, ultima_incluida, ultima_vista, ultimos = [], None, -1e12, None, deque(maxlen=3)
@@ -698,7 +781,7 @@ def fotos_del_dia(disp: str, dia: str, solo_pasajeros: bool = False, limite: int
         f["cambio"] = cambio
         out.append(f)
         ultima_incluida = f["ts"]
-        if len(out) >= min(limite, 2000):
+        if len(out) >= limite:
             return out
     # "importantes" termina con la última foto del rango (cómo quedó la cabina).
     if filtro == "importantes" and ultima_vista and (not out or out[-1]["ts"] != ultima_vista["ts"]):

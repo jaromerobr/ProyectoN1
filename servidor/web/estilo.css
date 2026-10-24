@@ -217,11 +217,54 @@ canvas { display: block; border-radius: 16px; background: #000; cursor: crosshai
 .comparar div { background: var(--card-2); border-radius: 16px; padding: 10px 12px; }
 .comparar b { display: block; margin-top: 3px; }
 
+/* Estado de la conexión de la cámara (llegando información, subiendo lo guardado…) */
+.envoltura-conexion { max-width: var(--ancho); margin: 0 auto; padding: 0 24px 6px; }
+.envoltura-conexion:empty { display: none; }
+.conexion { display: flex; gap: 12px; align-items: flex-start; background: var(--card); border-radius: 18px;
+  padding: 12px 16px; box-shadow: var(--sombra); }
+.conexion .m { margin-top: 2px; font-size: 13px; }
+.conexion > div { flex: 1; min-width: 0; }
+.conexion .punto { --c: var(--muted); flex: none; width: 12px; height: 12px; border-radius: 50%; margin-top: 4px; background: var(--c); }
+.conexion.recibiendo .punto, .conexion.subiendo .punto { --c: var(--ok); animation: latido 1.6s ease-out infinite; }
+.conexion.sin_fotos { background: var(--warn-bg); }
+.conexion.sin_fotos .punto { --c: var(--warn); animation: latido 1.6s ease-out infinite; }
+.conexion.corto { box-shadow: none; background: var(--card-2); padding: 8px 12px; border-radius: 14px; font-size: 13px; }
+.conexion.corto.sin_fotos { background: var(--warn-bg); }
+.conexion.corto .punto { width: 9px; height: 9px; margin-top: 4px; }
+@keyframes latido {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 55%, transparent); }
+  70% { box-shadow: 0 0 0 9px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.barra-avance { height: 6px; border-radius: 99px; background: var(--tonal); overflow: hidden; margin-top: 8px; }
+.barra-avance span { display: block; height: 100%; background: var(--ok); border-radius: 99px; transition: width .6s ease; }
+
+/* Esperando datos: un giro y un texto; las fotos muestran un brillo hasta llegar */
+.cargando { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; padding: 18px 4px; grid-column: 1 / -1; }
+.giro { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid var(--tonal); border-top-color: var(--acc);
+  animation: girar .8s linear infinite; flex: none; }
+@keyframes girar { to { transform: rotate(360deg); } }
+:is(.galeria, .evento, .tira, .detalle-linea) img:not(.lista), img.mini:not(.lista) {
+  background: linear-gradient(100deg, var(--card-2) 30%, var(--tonal) 50%, var(--card-2) 70%);
+  background-size: 300% 100%; animation: brillo 1.3s linear infinite;
+}
+.galeria img.lista, .visor img.lista { animation: aparecer .3s ease-out; }
+.visor img:not(.lista) { width: min(800px, 86vw); aspect-ratio: 4/3; border-radius: 16px;
+  background: linear-gradient(100deg, #1c1c1f 30%, #2c2c31 50%, #1c1c1f 70%); background-size: 300% 100%;
+  animation: brillo 1.3s linear infinite; }
+img.rota { background: var(--card-2) !important; animation: none !important; }
+@keyframes brillo { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@keyframes aparecer { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .giro, .conexion .punto, img, .barra-avance span { animation: none !important; transition: none !important; }
+}
+
 /* Teléfono: pestañas como barra inferior (One UI), menos márgenes */
 @media (max-width: 860px) {
   .dos { grid-template-columns: 1fr; }
   header { padding: 14px 16px 8px; }
   main { padding: 4px 12px 96px; }
+  .envoltura-conexion { padding: 0 12px 6px; }
 }
 @media (max-width: 700px) {
   .pestanas {

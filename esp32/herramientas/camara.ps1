@@ -9,6 +9,7 @@ Configura y revisa la cámara Taxiff por el cable USB (puerto UART de la placa).
   .\camara.ps1 olvidar "NOMBRE_RED"         borra una red guardada
   .\camara.ps1 portal                       abre su red Taxiff-Cam por 10 min (igual que BOOT 3 s)
   .\camara.ps1 probarsd                     prueba la tarjeta SD (escribe y lee 1 MB)
+  .\camara.ps1 clavesd                      clave de cifrado de la SD (para descifrar_sd.ps1)
   .\camara.ps1 sinwifi                      prueba: funciona como si no hubiera WiFi (como en el taxi)
   .\camara.ps1 conwifi                      termina esa prueba
   .\camara.ps1 mensajes 30                  lo que va diciendo durante 30 s
@@ -17,7 +18,7 @@ Configura y revisa la cámara Taxiff por el cable USB (puerto UART de la placa).
 Opcional: -Puerto COM5 (si no, usa el primer puerto que encuentre).
 #>
 param(
-  [Parameter(Position = 0)][ValidateSet("ip", "wifi", "servidor", "redes", "guardadas", "olvidar", "portal", "probarsd", "sinwifi", "conwifi", "mensajes", "registro")][string]$Accion = "ip",
+  [Parameter(Position = 0)][ValidateSet("ip", "wifi", "servidor", "redes", "guardadas", "olvidar", "portal", "probarsd", "clavesd", "sinwifi", "conwifi", "mensajes", "registro")][string]$Accion = "ip",
   [Parameter(Position = 1)][string]$Valor1 = "",
   [Parameter(Position = 2)][string]$Valor2 = "",
   [string]$Puerto = ""
@@ -161,6 +162,16 @@ try {
       $port.Write("SDTEST`n")
       $t = Leer 30 "SDTEST (OK|FALLO)[^\n]*\n"
       if ($t -match "# (SDTEST [^\r\n]*)") { Write-Host $Matches[1] }
+      else { Write-Host "La cámara no respondió. Repite en 1 minuto." }
+    }
+
+    "clavesd" {
+      $port.Write("CLAVESD`n")
+      $t = Leer 6 "CLAVESD[^\n]*\n"
+      if ($t -match "# CLAVESD ([0-9a-f]{32})") {
+        Write-Host "Clave de cifrado de la SD: $($Matches[1])"
+        Write-Host "Guárdala en un lugar seguro: con ella y la tarjeta se pueden ver las fotos (descifrar_sd.ps1)."
+      } elseif ($t -match "# (CLAVESD[^\r\n]*)") { Write-Host $Matches[1] }
       else { Write-Host "La cámara no respondió. Repite en 1 minuto." }
     }
 

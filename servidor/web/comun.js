@@ -15,10 +15,29 @@ const hace = ts => { if (!ts) return 'nunca'; const s = Date.now() / 1000 - ts;
 const ESTADOS = { LIBRE: ['LIBRE', ''], CONFIRMANDO: ['CONFIRMANDO', 'amarillo'], EN_CARRERA: ['EN CARRERA', 'verde'] };
 
 function pill(t) {
-  if (!t.en_linea) return '<span class="pill">SIN CONEXIÓN</span>';
+  const c = t.conexion?.estado;
+  if (c === 'sin_fotos') return '<span class="pill amarillo">CONECTADA · SIN FOTOS</span>';
+  if (c ? c === 'sin_conexion' : !t.en_linea) return '<span class="pill">SIN CONEXIÓN</span>';
   const [txt, cls] = ESTADOS[t.estado] || ESTADOS.LIBRE;
   return `<span class="pill ${cls}">${txt}</span>`;
 }
+
+// Qué está pasando con la cámara: recibiendo / subiendo lo guardado (con barra) /
+// conectada sin fotos / sin conexión. `corto` = versión de una línea (tarjetas).
+function conexion(t, corto) {
+  const c = t.conexion;
+  if (!c) return '';
+  const hecho = c.cola_max ? Math.round(100 * (c.cola_max - c.cola) / c.cola_max) : 0;
+  const barra = c.estado === 'subiendo'
+    ? `<div class="barra-avance" role="progressbar" aria-valuenow="${hecho}" aria-valuemin="0" aria-valuemax="100"><span style="width:${hecho}%"></span></div>` : '';
+  return `<div class="conexion ${c.estado}${corto ? ' corto' : ''}" role="status"><span class="punto"></span>` +
+    `<div><b>${esc(c.titulo)}</b>${corto ? '' : `<div class="m">${esc(c.detalle)}</div>`}${barra}</div></div>`;
+}
+
+// Las fotos aparecen suavemente al terminar de cargar (antes se ve un brillo de "cargando").
+document.addEventListener('load', e => { if (e.target.tagName === 'IMG') e.target.classList.add('lista'); }, true);
+document.addEventListener('error', e => { if (e.target.tagName === 'IMG') e.target.classList.add('lista', 'rota'); }, true);
+const cargando = texto => `<div class="cargando"><span class="giro"></span>${esc(texto || 'Cargando…')}</div>`;
 
 async function api(url, body) {
   const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
