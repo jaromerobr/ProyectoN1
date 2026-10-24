@@ -164,6 +164,7 @@ void logEvent(const char *fmt, ...);
 const int MAX_REDES = 5;
 DNSServer dns;
 uint32_t portalUntil = 0;  // la red propia de configuración se cierra a esta hora (millis)
+uint32_t portalDesde = 0;  // cuándo se abrió (buscar redes en ese mismo instante no ve ninguna)
 
 std::vector<Red> loadNetworks() {
   // Las versiones anteriores guardaban una sola red en "ssid"/"pass".
@@ -507,8 +508,11 @@ const senal=r=>{const n=r>-55?4:r>-67?3:r>-75?2:1;return '<svg width="22" height
 let red='';
 const abrir=(n,manual)=>{red=n;$('hNom').textContent=manual?'otra red':n;$('hSsid').style.display=manual?'block':'none';$('p').value='';$('hoja').classList.add('ver');setTimeout(()=>(manual?$('s'):$('p')).focus(),250)};
 const cerrar=()=>$('hoja').classList.remove('ver');
-const cargar=()=>{$('vis').innerHTML='<div class="sk"></div><div class="sk"></div><div class="sk"></div>';
-fetch('/redes').then(r=>r.json()).then(d=>{
+let reintento;
+const cargar=nuevo=>{clearTimeout(reintento);if(nuevo)$('vis').innerHTML='<div class="sk"></div><div class="sk"></div><div class="sk"></div><p class="m">Buscando… si el teléfono se desconecta un momento, vuelve a conectarte a Taxiff-Cam.</p>';
+fetch('/redes'+(nuevo?'?nuevo=1':'')).then(r=>r.json()).then(d=>{
+if(d.buscando)reintento=setTimeout(()=>cargar(false),1500);
+if(d.buscando&&!d.visibles.length)return;
 const a=$('aviso');a.className='aviso';
 if(d.conectada){a.className='aviso ok';a.textContent='Conectada a '+d.conectada+'. Todo listo.'}
 else if(d.ultimo_mal){a.className='aviso mal';a.textContent='No se pudo conectar a '+d.ultimo_mal+'. Revisa la contraseña y vuelve a intentarlo.'}
@@ -516,15 +520,15 @@ $('vis').innerHTML=d.visibles.length?d.visibles.map((n,i)=>'<div class="red" dat
 $('vis').querySelectorAll('.red').forEach(el=>el.onclick=()=>abrir(d.visibles[el.dataset.i].ssid));
 $('gua').innerHTML=d.guardadas.length?d.guardadas.map((g,i)=>'<div class="red" style="cursor:default"><span class="nom">'+esc(g)+'</span><button class="quitar" data-i="'+i+'">Quitar</button></div>').join(''):'<p class="m">Ninguna todavía.</p>';
 $('gua').querySelectorAll('.quitar').forEach(b=>b.onclick=()=>{const g=d.guardadas[b.dataset.i];if(confirm('¿Olvidar la red '+g+'?'))fetch('/wifi_borrar',{method:'POST',body:'s='+encodeURIComponent(g)}).then(cargar)});
-}).catch(()=>{$('vis').innerHTML='<p class="m">No se pudo buscar. Toca Actualizar.</p>'})};
-$('otra').onclick=cargar;$('cancelar').onclick=cerrar;
+}).catch(()=>{reintento=setTimeout(()=>cargar(false),2500)})};
+$('otra').onclick=()=>cargar(true);$('cancelar').onclick=cerrar;
 $('manual').onclick=e=>{e.preventDefault();abrir('',true)};
 $('ojo').onclick=()=>{const p=$('p');p.type=p.type==='password'?'text':'password';$('ojo').textContent=p.type==='password'?'Mostrar':'Ocultar'};
 $('form').onsubmit=e=>{e.preventDefault();const n=red||$('s').value.trim();if(!n)return;
 $('ok').disabled=true;$('ok').innerHTML='<span class="giro"></span>Guardando…';
 const fin=()=>{cerrar();$('app').innerHTML='<div class="listo"><div class="check"><svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div><h1>Guardado</h1><p>La cámara se reinicia y se conecta a <b>'+esc(n)+'</b>.</p><p class="m">Ya puedes volver a tu WiFi de siempre.<br>Si la contraseña estaba mal, la red <b>Taxiff-Cam</b> vuelve a aparecer en un minuto para corregirla.</p></div>'};
 fetch('/save',{method:'POST',body:'s='+encodeURIComponent(n)+'&p='+encodeURIComponent($('p').value)}).then(fin,fin)};
-cargar();
+cargar(false);
 </script></body></html>)HTML";
 
 // ---- Quién puede entrar --------------------------------------------------------
@@ -647,10 +651,31 @@ String jsonEsc(const String &s) {
   return o;
 }
 
-// /redes: redes que ve la cámara (sin repetir, mejor señal primero) y guardadas.
-esp_err_t handleRedes(httpd_req_t *req) {
-  SOLO_CONFIGURACION();
-  int n = WiFi.scanNetworks();
+// Búsqueda de redes en segundo plano. Buscar recorre todos los canales y,
+// mientras tanto, la red Taxiff-Cam no atiende: si /redes esperaba la búsqueda,
+// el teléfono del dueño perdía la conexión. Ahora /redes responde al instante
+// con lo último encontrado y la página vuelve a preguntar hasta que termina.
+String redesVisibles = "";        // JSON de la última búsqueda: [{"ssid":..,"rssi":..},…]
+volatile bool buscandoRedes = false;
+uint32_t redesCuando = 0;
+SemaphoreHandle_t redesLock = nullptr;  // la escribe el bucle principal y la lee el servidor web
+
+void buscarRedes() {
+  if (buscandoRedes) return;
+  if (WiFi.scanNetworks(true, false, false, 120) == WIFI_SCAN_FAILED) return;  // async, 120 ms por canal
+  buscandoRedes = true;
+}
+
+// Desde el bucle principal: guarda el resultado cuando la búsqueda termina.
+void revisarBusqueda() {
+  if (!buscandoRedes) return;
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) return;
+  buscandoRedes = false;
+  if (n <= 0) {  // falló o no vio nada (pasa justo al abrir Taxiff-Cam): se reintenta
+    WiFi.scanDelete();
+    return;
+  }
   std::vector<std::pair<int, String>> vis;
   for (int i = 0; i < n; i++) {
     String s = WiFi.SSID(i);
@@ -659,15 +684,45 @@ esp_err_t handleRedes(httpd_req_t *req) {
     if (it == vis.end()) vis.push_back({WiFi.RSSI(i), s});
     else it->first = max(it->first, (int)WiFi.RSSI(i));
   }
+  WiFi.scanDelete();
   std::sort(vis.begin(), vis.end(), [](const std::pair<int, String> &a, const std::pair<int, String> &b) { return a.first > b.first; });
-  String j = "{\"conectada\":\"" + jsonEsc(WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String()) +
-             "\",\"ultimo_mal\":\"" + jsonEsc(prefs.getString("wmal", "")) + "\",\"guardadas\":[";
-  auto redes = loadNetworks();
-  for (size_t i = 0; i < redes.size(); i++) j += String(i ? "," : "") + "\"" + jsonEsc(redes[i].ssid) + "\"";
-  j += "],\"visibles\":[";
+  String j = "[";
   for (size_t i = 0; i < vis.size(); i++)
     j += String(i ? "," : "") + "{\"ssid\":\"" + jsonEsc(vis[i].second) + "\",\"rssi\":" + vis[i].first + "}";
-  j += "]}";
+  j += "]";
+  xSemaphoreTake(redesLock, portMAX_DELAY);
+  redesVisibles = j;
+  redesCuando = millis();
+  xSemaphoreGive(redesLock);
+}
+
+// La búsqueda para reconectarse (connectBest) no puede correr junto a una en segundo plano.
+void esperarBusqueda() {
+  if (!buscandoRedes) return;
+  for (int i = 0; i < 60 && WiFi.scanComplete() == WIFI_SCAN_RUNNING; i++) delay(100);
+  revisarBusqueda();
+  buscandoRedes = false;
+}
+
+// /redes: redes que ve la cámara (sin repetir, mejor señal primero) y guardadas.
+// ?nuevo=1 pide una búsqueda nueva (botón Actualizar).
+esp_err_t handleRedes(httpd_req_t *req) {
+  SOLO_CONFIGURACION();
+  char q[32] = {0}, v[4];
+  bool nuevo = httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK &&
+               httpd_query_key_value(q, "nuevo", v, sizeof v) == ESP_OK;
+  // Con un teléfono conectado a Taxiff-Cam solo se busca si lo pide (Actualizar):
+  // buscar apaga un momento esa red y el teléfono se desconecta.
+  bool hayTelefono = apMode && WiFi.softAPgetStationNum() > 0;
+  if (nuevo || !redesCuando || (!hayTelefono && millis() - redesCuando > 20000)) buscarRedes();
+  String j = "{\"conectada\":\"" + jsonEsc(WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String()) +
+             "\",\"ultimo_mal\":\"" + jsonEsc(prefs.getString("wmal", "")) +
+             "\",\"buscando\":" + (buscandoRedes ? "true" : "false") + ",\"guardadas\":[";
+  auto redes = loadNetworks();
+  for (size_t i = 0; i < redes.size(); i++) j += String(i ? "," : "") + "\"" + jsonEsc(redes[i].ssid) + "\"";
+  xSemaphoreTake(redesLock, portMAX_DELAY);
+  j += "],\"visibles\":" + (redesVisibles.length() ? redesVisibles : String("[]")) + "}";
+  xSemaphoreGive(redesLock);
   httpd_resp_set_type(req, "application/json");
   return httpd_resp_send(req, j.c_str(), j.length());
 }
@@ -1855,6 +1910,7 @@ void startServer() {
 bool connectBest(bool verbose) {
   auto redes = loadNetworks();
   if (redes.empty()) return false;
+  esperarBusqueda();
   int n = WiFi.scanNetworks();
   std::vector<std::pair<int, int>> cand;  // (señal, índice en la búsqueda)
   for (int i = 0; i < n; i++)
@@ -1906,6 +1962,7 @@ void startPortal(uint32_t ms) {
   WiFi.mode(WIFI_AP_STA);  // a la vez sigue buscando las redes guardadas
   WiFi.softAP(AP_SSID, AP_PASS);
   dns.start(53, "*", WiFi.softAPIP());
+  portalDesde = millis();  // la lista de redes se busca a los 3 s (ver loop)
   Serial.printf("# Configurar WiFi: conectate a la red %s (clave %s); la pagina se abre sola\n", AP_SSID, AP_PASS);
   logEvent("red de configuración '%s' abierta", AP_SSID);
 }
@@ -1999,6 +2056,7 @@ void setup() {
   }
   Serial.printf("# Arranque: %s | historial: %s\n", bootReason.c_str(), bootHistory.c_str());
   lock = xSemaphoreCreateMutex();
+  redesLock = xSemaphoreCreateMutex();
   // La primera vez formatea la partición de 9 MB (tarda unos segundos).
   fatOk = FFat.begin(true);
   if (!fatOk) Serial.println("# ERROR: no se pudo abrir la memoria interna");
@@ -2078,6 +2136,14 @@ void serialCommands() {
       ESP.restart();
     } else if (line == "SDTEST") {
       sdSelfTest();
+    } else if (line == "QHEX") {  // diagnóstico: primeros 64 bytes de la última foto de la cola, tal como están en la SD
+      File f = qTail > qHead ? store->open(qPath(qTail - 1), "r") : File();
+      uint8_t b[64];
+      size_t n = f ? f.read(b, sizeof b) : 0;
+      if (f) f.close();
+      Serial.print("# QHEX ");
+      for (size_t i = 0; i < n; i++) Serial.printf("%02x", b[i]);
+      Serial.println(n ? "" : "(cola vacia)");
     } else if (line == "CLAVESD") {  // solo por cable: para descifrar la tarjeta en una PC (docs/SEGURIDAD.md)
       uint8_t k[16];
       if (prefs.getBytes("aesk", k, 16) == 16) {
@@ -2096,6 +2162,7 @@ void serialCommands() {
     } else if (line == "LOG") {
       printLog();
     } else if (line == "SCAN") {
+      esperarBusqueda();
       int n = WiFi.scanNetworks(false, true);
       Serial.printf("# SCAN: %d redes\n", n);
       for (int i = 0; i < n && i < 15; i++) {
@@ -2209,6 +2276,17 @@ void loop() {
   static uint32_t lastT = 0, bootPressed = 0;
   serialCommands();
   if (apMode) dns.processNextRequest();  // portal cautivo
+  revisarBusqueda();
+  // Con Taxiff-Cam abierta y nadie conectado, la lista de redes se mantiene al
+  // día: cuando el dueño entra ya está lista (sin tener que buscar con él conectado).
+  if (apMode && !buscandoRedes && millis() - portalDesde > 3000 && WiFi.softAPgetStationNum() == 0 &&
+      (!redesCuando || millis() - redesCuando > 30000)) {
+    static uint32_t ultimoIntento = 0;
+    if (millis() - ultimoIntento > 5000) {
+      ultimoIntento = millis();
+      buscarRedes();
+    }
+  }
   // BOOT mantenido 3 s: abre la red de configuración 10 minutos.
   if (digitalRead(0) == LOW) {
     if (!bootPressed) bootPressed = millis();

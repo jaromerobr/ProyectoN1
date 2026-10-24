@@ -4,7 +4,19 @@ Lo más nuevo arriba. La seguridad y el cifrado se explican en detalle en [SEGUR
 
 ---
 
-## Firmware 3.9 (compilado, falta probarlo en la placa)
+## Firmware 3.9 (probado en la placa y publicado en el servidor)
+
+**Probado el 23/10/2026:**
+- **Desde la WiFi de la casa:** la página de la cámara da 401 (acceso negado) sin clave o con clave mala, y 200 con la clave.
+- **Desde `Taxiff-Cam`:** la página de WiFi se abre sin clave. Todo lo demás, incluidas las pruebas de "¿hay internet?" de Android y de iPhone, va a la página de WiFi.
+- **Cifrado:** en la tarjeta la foto está cifrada (`TXQ3`). `descifrar_sd.ps1` la recupera con la clave correcta y falla con una equivocada. La cámara la descifra y la sube sin errores.
+- **Cola:** subieron las 1091 fotos atascadas, a unas 140 por minuto.
+
+**Búsqueda de redes de la página de WiFi:** buscar redes apaga un momento la red `Taxiff-Cam` (el ESP32 tiene una sola radio), y el teléfono del dueño se desconectaba.
+- Ahora la cámara busca en segundo plano, **solo cuando no hay ningún teléfono conectado**, cada 30 s.
+- Cuando el dueño entra, la lista ya está lista.
+- "Actualizar" igual busca, y avisa que el teléfono puede desconectarse un momento.
+- Comando de diagnóstico `QHEX`: primeros bytes de la última foto de la cola, tal como están en la SD.
 
 **Seguridad**
 - **La página de la cámara pide clave.** Es la de imagen en vivo, ajustes y fotos. Usuario `admin` y la clave de `secretos.h`, que no se sube a GitHub y que `cargar_firmware.ps1` crea sola la primera vez.
