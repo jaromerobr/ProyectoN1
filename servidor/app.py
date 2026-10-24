@@ -102,7 +102,9 @@ with _db_lock:
                        ("dispositivos", "cfg_camara TEXT"), ("dispositivos", "ajustes_aplicados INTEGER DEFAULT 0"),
                        ("dispositivos", "ip_local TEXT"), ("dispositivos", "contacto REAL"),
                        ("dispositivos", "cola_max INTEGER DEFAULT 0"),
-                       ("carreras", "pasajeros INTEGER"), ("carreras", "eventos TEXT")):
+                       ("dispositivos", "contar_con_wifi INTEGER DEFAULT 0"),
+                       ("carreras", "pasajeros INTEGER"), ("carreras", "eventos TEXT"),
+                       ("carreras", "revisar INTEGER DEFAULT 0"), ("carreras", "con_wifi INTEGER DEFAULT 0")):
         try:
             _db.execute(f"ALTER TABLE {tabla} ADD COLUMN {col}")
         except sqlite3.OperationalError:
@@ -213,9 +215,10 @@ class Carrera:
         self.fotos = []
         self.ultima_ts = 0
         self.ultima_con_gente = 0
+        self.con_wifi = False   # alguna foto de esta carrera se tomó con WiFi (¿en casa del dueño?)
         self.recibida = time.time()  # hora real (no la de la foto) en que llegó la última
 
-    def actualizar(self, ts, n, foto):
+    def actualizar(self, ts, n, foto, con_wifi=False):
         """Procesa una foto, en el orden en que se tomaron. Devuelve la carrera
         cerrada (dict) si terminó una."""
         self.recibida = time.time()
@@ -232,12 +235,14 @@ class Carrera:
         self.ultimos.append(n)
         c = int(statistics.median(self.ultimos))
         self.ultima_ts = ts
+        if con_wifi and (c >= 1 or self.estado != "LIBRE"):
+            self.con_wifi = True
         if self.estado == "LIBRE":
             if c >= 1:
                 self.estado, self.desde = "CONFIRMANDO", ts
         elif self.estado == "CONFIRMANDO":
             if c == 0:
-                self.estado = "LIBRE"
+                self.estado, self.con_wifi = "LIBRE", False
             elif ts - self.desde >= CONFIRMAR_S:
                 self.estado, self.inicio, self.max = "EN_CARRERA", self.desde, c
                 self.cero_desde, self.fotos = None, [foto]
@@ -282,14 +287,15 @@ class Carrera:
         eventos = self.eventos + ([[fin, "baja", self.nivel, 0]] if self.nivel else [])
         r = {"inicio": self.inicio, "fin": fin, "duracion": dur, "max_pax": self.max,
              "pasajeros": max(self.distintos, self.max), "eventos": eventos,
-             "valida": int(dur >= MINIMO_S), "fotos": [p for _, p in self.fotos[:30]]}
+             "valida": int(dur >= MINIMO_S), "fotos": [p for _, p in self.fotos[:30]],
+             "con_wifi": int(self.con_wifi)}
         self.__init__()
         return r
 
     # El estado se guarda en la base después de cada foto: si el servidor se
     # reinicia, la carrera en curso sigue donde iba.
     _CAMPOS = ("estado", "desde", "inicio", "cero_desde", "max", "nivel", "cand", "cand_desde",
-               "distintos", "eventos", "fotos", "ultima_ts", "ultima_con_gente")
+               "distintos", "eventos", "fotos", "ultima_ts", "ultima_con_gente", "con_wifi")
 
     def a_json(self):
         d = {k: getattr(self, k) for k in self._CAMPOS}
@@ -329,19 +335,38 @@ def guardar_estado(disp, car):
        "ON CONFLICT(dispositivo) DO UPDATE SET datos = excluded.datos", (disp, car.a_json()))
 
 
+def a_revisar(disp, c):
+    """Una carrera hecha con fotos tomadas con WiFi no se cuenta sola: con
+    internet la cámara suele estar en la casa del dueño subiendo lo grabado, y
+    ahí la gente de la casa parecería una carrera. Queda "por revisar" para que
+    alguien del panel decida. Salvo que el taxi use internet en el auto
+    (hotspot del conductor): ajuste "contar_con_wifi" del taxi."""
+    if not (c.get("con_wifi") and c["valida"]) or c.get("decidida"):
+        return c
+    d = db("SELECT contar_con_wifi FROM dispositivos WHERE id = ?", (disp,), one=True)
+    if d and d["contar_con_wifi"]:
+        return c
+    return {**c, "valida": 0, "revisar": 1}
+
+
 def guardar_carrera(disp, c, anotar=True):
+    c = a_revisar(disp, c)
     if anotar:
-        evento(disp, f"carrera {'válida' if c['valida'] else 'descartada'}: "
+        tipo = "por revisar (fotos tomadas con WiFi: ¿en casa?)" if c.get("revisar") else \
+            "válida" if c["valida"] else "descartada"
+        evento(disp, f"carrera {tipo}: "
                      f"{datetime.fromtimestamp(c['inicio']):%d/%m %H:%M:%S} → {datetime.fromtimestamp(c['fin']):%H:%M:%S}, "
-                     f"{int(c['duracion'])} s, {c.get('pasajeros', c['max_pax'])} pasajero(s)", nivel="info")
+                     f"{int(c['duracion'])} s, {c.get('pasajeros', c['max_pax'])} pasajero(s)",
+                     nivel="aviso" if c.get("revisar") else "info")
     _guardar_carrera(disp, c)
 
 
 def _guardar_carrera(disp, c):
-    db("INSERT INTO carreras (dispositivo, inicio, fin, duracion, max_pax, pasajeros, eventos, valida, fotos) "
-       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    db("INSERT INTO carreras (dispositivo, inicio, fin, duracion, max_pax, pasajeros, eventos, valida, fotos, "
+       "revisar, con_wifi) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
        (disp, c["inicio"], c["fin"], c["duracion"], c["max_pax"], c.get("pasajeros", c["max_pax"]),
-        json.dumps(c.get("eventos", [])), c["valida"], json.dumps(c["fotos"])))
+        json.dumps(c.get("eventos", [])), c["valida"], json.dumps(c["fotos"]),
+        int(c.get("revisar", 0)), int(c.get("con_wifi", 0))))
 
 # ---------------------------------------------------------------- app
 
@@ -422,16 +447,31 @@ async def registro(request: Request):
     return {"token": token, "aprobado": bool(d["aprobado"]) if d else AUTO_APROBAR}
 
 
+FOTO_CON_WIFI = 0x40000000  # bit en el conteo de la cámara: la foto se tomó con WiFi
+
+
+def separar_conteo(conteo):
+    """(pasajeros que contó la cámara, ¿se tomó con WiFi?)."""
+    conteo = int(conteo or 0)
+    if conteo < 0:
+        return conteo, False
+    return conteo & ~FOTO_CON_WIFI, bool(conteo & FOTO_CON_WIFI)
+
+
 def procesar_foto(d, datos, ts_camara, conteo, estimada=False):
     """Guarda una foto, cuenta pasajeros con YOLO y avanza la carrera del taxi.
     Devuelve (ruta relativa, pasajeros, estado de la carrera)."""
     ahora = time.time()
+    conteo, con_wifi = separar_conteo(conteo)
     # Las fotos guardadas sin internet llegan con la hora en que se tomaron.
     # Si la cámara arrancó sin internet la estima a partir de sus arranques
     # (`estimada`): se respeta, para que queden en orden, pero se marca como
-    # "hora aproximada". Sin ninguna hora se usa la de llegada.
+    # "hora aproximada". Si no sabe ninguna hora, la foto queda aparte ("sin
+    # hora"): no se pone en la línea del tiempo (antes se le daba la hora de
+    # llegada y quedaba mezclada con las fotos de ese momento) ni cuenta para carreras.
     valida = bool(ts_camara) and abs(ahora - ts_camara) <= MAX_ATRASO_S
     aprox = estimada or not valida
+    sin_hora = not valida
     ts = ts_camara if valida else ahora
     carpeta = FOTOS / d["id"] / datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
     carpeta.mkdir(parents=True, exist_ok=True)
@@ -447,12 +487,16 @@ def procesar_foto(d, datos, ts_camara, conteo, estimada=False):
     for b in dets:
         b.append(int(dentro_de_jaula((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, jaula)))
     n = sum(b[5] for b in dets)
-    ruta.with_suffix(".json").write_text(json.dumps(
-        {"ts": ts, "dets": dets, "n": n, "n_esp": conteo, "aprox": aprox}))
+    info = {"ts": ts, "dets": dets, "n": n, "n_esp": conteo, "aprox": aprox}
+    if sin_hora:
+        info["sin_hora"] = True
+    if con_wifi:
+        info["con_wifi"] = True
+    ruta.with_suffix(".json").write_text(json.dumps(info))
 
     with _carreras_lock:
         car = carrera_de(d["id"])
-        cerrada = car.actualizar(ts, n, (ts, rel))
+        cerrada = None if sin_hora else car.actualizar(ts, n, (ts, rel), con_wifi)
         estado = car.estado
         guardar_estado(d["id"], car)
     if cerrada:
@@ -462,6 +506,7 @@ def procesar_foto(d, datos, ts_camara, conteo, estimada=False):
 
 def _actualizar_dispositivo(d, rel, n, conteo, estado, recibidas, cola, fw, rssi, temp,
                             cfg=None, ajustes_ver=None, ip=None):
+    conteo = separar_conteo(conteo)[0]
     db("UPDATE dispositivos SET visto = ?, fw = COALESCE(?, fw), rssi = COALESCE(?, rssi), "
        "temp = COALESCE(?, temp), ultima_foto = ?, pax = ?, pax_esp = ?, estado = ?, cola = ?, "
        "fotos_recibidas = fotos_recibidas + ?, cfg_camara = COALESCE(?, cfg_camara), "
@@ -493,6 +538,7 @@ RITMO_VACIO_MS = 15000    # cabina vacía (para poder comprobar que de verdad no
 
 
 def _respuesta(d, estado, n, conteo, ajustes_ver_camara=-1, **extra):
+    conteo = separar_conteo(conteo)[0]
     if estado == "CONFIRMANDO" or (estado == "LIBRE" and (n > 0 or conteo > 0)):
         intervalo = RITMO_CAMBIO_MS
     elif estado == "EN_CARRERA":
@@ -678,6 +724,8 @@ def _info_taxi(d):
     d["ajustes_pendientes"] = bool(d["ajustes"]) and (d.get("ajustes_aplicados") or 0) != (d.get("ajustes_ver") or 0)
     d["carreras_hoy"] = db("SELECT COUNT(*) AS n FROM carreras WHERE dispositivo = ? AND inicio >= ? AND valida = 1",
                            (d["id"], hoy), one=True)["n"]
+    d["por_revisar"] = db("SELECT COUNT(*) AS n FROM carreras WHERE dispositivo = ? AND revisar = 1",
+                          (d["id"],), one=True)["n"]
     with _carreras_lock:
         c = carrera_de(d["id"])
         d["carrera_s"] = int(c.ultima_ts - c.inicio) if c and c.estado == "EN_CARRERA" else 0
@@ -728,7 +776,8 @@ def fotos_del_dia(disp: str, dia: str, solo_pasajeros: bool = False, limite: int
     - `desde`/`hasta` (hora en segundos): un rango, p. ej. una carrera.
     - `filtro`: "" todas · "pasajeros" con alguien · "vacias" sin nadie (para
       comprobar que de verdad no había nadie) · "importantes" solo donde cambió
-      el número de pasajeros (subió o bajó alguien), más la primera y la última.
+      el número de pasajeros (subió o bajó alguien), más la primera y la última ·
+      "sin_hora" las que la cámara no supo cuándo tomó (los demás filtros no las incluyen).
     - `cada` (segundos): como mucho una foto cada tanto (p. ej. 60 = una por minuto)."""
     if solo_pasajeros:
         filtro = "pasajeros"
@@ -763,8 +812,13 @@ def _fotos_en_orden(carpeta, disp, dia, desde, hasta, filtro, cada, limite):
             continue
         if not j.with_suffix(".jpg").exists():
             continue
+        # Las fotos "sin hora" (la cámara no supo cuándo las tomó) van aparte:
+        # su hora es la de llegada y, en la línea del tiempo, se mezclarían.
+        if bool(info.get("sin_hora")) != (filtro == "sin_hora"):
+            continue
         f = {"foto": f"{disp}/{dia}/{j.stem}.jpg", "ts": info["ts"], "n": info.get("n", 0),
-             "n_esp": info.get("n_esp", 0), "aprox": info.get("aprox", False)}
+             "n_esp": info.get("n_esp", 0), "aprox": info.get("aprox", False),
+             "sin_hora": info.get("sin_hora", False), "con_wifi": info.get("con_wifi", False)}
         ultimos.append(f["n"])
         suavizado = int(statistics.median(ultimos))
         cambio = anterior is None or suavizado != anterior
@@ -804,18 +858,48 @@ def carreras_del_dia(disp: str, dia: str):
         c["eventos"] = json.loads(c.get("eventos") or "[]")
         c["pasajeros"] = c.get("pasajeros") or c["max_pax"]
     validas = [c for c in rows if c["valida"]]
+    por_revisar = sum(1 for c in rows if c.get("revisar"))
     return {"carreras": rows, "resumen": {
         "carreras": len(validas),
-        "descartadas": len(rows) - len(validas),
+        "descartadas": len(rows) - len(validas) - por_revisar,
+        "por_revisar": por_revisar,
         "tiempo_s": sum(c["duracion"] for c in validas),
         "pasajeros": sum(c["pasajeros"] for c in validas),
         "mas_larga_s": max((c["duracion"] for c in validas), default=0)}}
 
 
+@app.get("/api/panel/taxi/{disp}/por_revisar", dependencies=[Depends(panel_auth)])
+def carreras_por_revisar(disp: str):
+    """Carreras hechas con fotos tomadas con WiFi (¿en casa del dueño?) que
+    esperan que alguien decida si fueron carreras de verdad. Todas, de cualquier día."""
+    rows = db("SELECT * FROM carreras WHERE dispositivo = ? AND revisar = 1 ORDER BY inicio DESC LIMIT 200", (disp,))
+    for c in rows:
+        c["fotos"] = json.loads(c["fotos"] or "[]")
+        c["eventos"] = json.loads(c.get("eventos") or "[]")
+        c["pasajeros"] = c.get("pasajeros") or c["max_pax"]
+    return rows
+
+
+@app.post("/api/panel/taxi/{disp}/carrera/{cid}", dependencies=[Depends(panel_auth)])
+async def decidir_carrera(disp: str, cid: int, request: Request):
+    """{"valida": true | false}: alguien del panel decide una carrera por revisar
+    (o corrige cualquier otra)."""
+    body = await request.json()
+    c = db("SELECT * FROM carreras WHERE dispositivo = ? AND id = ?", (disp, cid), one=True)
+    if not c:
+        raise HTTPException(404)
+    valida = int(bool(body.get("valida")))
+    db("UPDATE carreras SET valida = ?, revisar = 0 WHERE id = ?", (valida, cid))
+    evento(disp, f"carrera del {datetime.fromtimestamp(c['inicio']):%d/%m %H:%M:%S} marcada como "
+                 f"{'VÁLIDA' if valida else 'NO válida'} desde el panel", nivel="info")
+    return {"ok": True, "valida": valida}
+
+
 def _resumen_carreras(carreras):
     validas = [c for c in carreras if c["valida"]]
-    return {"carreras": len(validas), "descartadas": len(carreras) - len(validas),
-            "tiempo_s": sum(c["duracion"] for c in validas),
+    por_revisar = sum(1 for c in carreras if c.get("revisar"))
+    return {"carreras": len(validas), "descartadas": len(carreras) - len(validas) - por_revisar,
+            "por_revisar": por_revisar, "tiempo_s": sum(c["duracion"] for c in validas),
             "pasajeros": sum(c.get("pasajeros") or c["max_pax"] for c in validas)}
 
 
@@ -838,7 +922,9 @@ def reconstruir_dia(disp, dia, jaula):
         if n != info.get("n", 0):
             cambios.append({"foto": rel, "ts": info["ts"], "antes": info.get("n", 0), "despues": n, "dets": dets})
         fotos.append((j, info, dets, n))
-        cerrada = car.actualizar(info["ts"], n, (info["ts"], rel))
+        if info.get("sin_hora"):
+            continue  # no se sabe cuándo se tomó: no entra en las carreras
+        cerrada = car.actualizar(info["ts"], n, (info["ts"], rel), info.get("con_wifi", False))
         if cerrada:
             carreras.append(cerrada)
     return carreras, cambios, fotos, car
@@ -863,6 +949,15 @@ async def reanalizar(disp: str, request: Request):
 
     carreras, cambios, fotos, car = await run_in_threadpool(reconstruir_dia, disp, dia, jaula)
     antes = db("SELECT * FROM carreras WHERE dispositivo = ? AND inicio >= ? AND inicio < ?", (disp, ini, ini + 86400))
+    # Las carreras con WiFi que alguien ya revisó conservan esa decisión (si la
+    # carrera nueva empieza casi a la misma hora); las demás quedan por revisar.
+    decididas = [c for c in antes if c.get("con_wifi") and not c.get("revisar")]
+    for i, c in enumerate(carreras):
+        c = a_revisar(disp, c)
+        previa = next((p for p in decididas if abs(p["inicio"] - c["inicio"]) < 15), None)
+        if previa and c.get("revisar"):
+            c = {**c, "valida": previa["valida"], "revisar": 0, "decidida": True}
+        carreras[i] = c
     if body.get("aplicar"):
         def aplicar():
             for j, info, dets, n in fotos:
@@ -884,8 +979,8 @@ async def reanalizar(disp: str, request: Request):
             "quitadas": sum(1 for c in cambios if c["despues"] < c["antes"]),
             "agregadas": sum(1 for c in cambios if c["despues"] > c["antes"]),
             "ejemplos": cambios[:60], "aplicado": bool(body.get("aplicar")),
-            "carreras": [{k: c[k] for k in ("inicio", "fin", "duracion", "max_pax", "pasajeros", "valida")}
-                         for c in carreras]}
+            "carreras": [{**{k: c[k] for k in ("inicio", "fin", "duracion", "max_pax", "pasajeros", "valida")},
+                          "revisar": c.get("revisar", 0)} for c in carreras]}
 
 
 @app.get("/api/panel/taxi/{disp}/registro", dependencies=[Depends(panel_auth)])
@@ -1002,6 +1097,12 @@ async def editar_taxi(disp: str, request: Request):
         actual.update(nuevos)
         db("UPDATE dispositivos SET ajustes = ?, ajustes_ver = ajustes_ver + 1 WHERE id = ?", (json.dumps(actual), disp))
         evento(disp, f"ajustes enviados desde el panel: {nuevos}", nivel="info")
+    if "contar_con_wifi" in body:
+        # El conductor usa internet (hotspot) en el taxi: las carreras con WiFi cuentan solas.
+        v = int(bool(body["contar_con_wifi"]))
+        db("UPDATE dispositivos SET contar_con_wifi = ? WHERE id = ?", (v, disp))
+        evento(disp, "las carreras con WiFi " + ("cuentan solas (hay internet en el taxi)" if v
+                     else "quedan por revisar (con WiFi suele estar en casa)"), nivel="info")
     if "jaula" in body:
         jaula = [[min(1, max(0, float(x))), min(1, max(0, float(y)))] for x, y in body["jaula"]][:20]
         db("UPDATE dispositivos SET jaula = ? WHERE id = ?", (json.dumps(jaula), disp))

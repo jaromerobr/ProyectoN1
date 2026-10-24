@@ -23,6 +23,7 @@
 <main>
   <!-- ======================= CARRERAS ======================= -->
   <section id="tab-carreras" class="tab">
+    <div id="porRevisar" class="card por-revisar" hidden></div>
     <div class="fila barra"><select id="diaCarreras"></select><span class="m" id="avisoCarreras"></span></div>
     <div class="card k resumen">
       <div><b id="rCarreras">0</b><span>carreras</span></div>
@@ -43,6 +44,7 @@
         <option value="">Todas</option>
         <option value="pasajeros">Con pasajeros</option>
         <option value="vacias">Cabina vacía (para comprobar)</option>
+        <option value="sin_hora">Sin hora (no se sabe cuándo se tomaron)</option>
       </select>
       <select id="fCada" title="Cuántas">
         <option value="0">Todas las tomadas</option>
@@ -151,6 +153,12 @@
       <p class="m" id="estadoAjustes"></p>
     </div>
     <div class="card">
+      <b>Carreras con WiFi</b>
+      <p class="m">Con WiFi la cámara suele estar en la casa del dueño subiendo lo grabado: por eso las carreras detectadas así quedan <b>por revisar</b> y no cuentan hasta que alguien decida.</p>
+      <label class="interruptor"><input type="checkbox" id="contarConWifi">
+        <span>El conductor usa internet en el taxi (hotspot): contar esas carreras sin revisar</span></label>
+    </div>
+    <div class="card">
       <label class="m">Nombre del taxi (placa, conductor…)<br><input id="nombre"></label>
       <div class="fila botones"><button id="guardarNombre">Guardar</button>
         <button id="aprobar" class="fantasma"></button></div>
@@ -220,7 +228,8 @@ function mostrarFoto() {
   const f = visorLista[visorI];
   $('vImg').classList.remove('lista');  // muestra el giro hasta que llegue la foto grande
   $('vImg').src = '/fotos/' + f.foto;
-  $('vInfo').innerHTML = `<b>${new Date(f.ts * 1000).toLocaleString('es-ES')}</b>${f.aprox ? ' (hora aproximada)' : ''}` +
+  $('vInfo').innerHTML = `<b>${new Date(f.ts * 1000).toLocaleString('es-ES')}</b>` +
+    (f.sin_hora ? ' (sin hora: es cuando llegó)' : f.aprox ? ' (hora aproximada)' : '') + (f.con_wifi ? ' · tomada con WiFi' : '') +
     ` · <b>${f.n}</b> pasajero${f.n === 1 ? '' : 's'} · ${visorI + 1} de ${visorLista.length}` +
     ` · <a href="/fotos/${f.foto}" download>descargar</a>`;
 }
@@ -239,7 +248,7 @@ document.addEventListener('keydown', e => {
 function miniatura(f, i, lista) {
   const a = document.createElement('a');
   a.className = 'foto' + (f.n ? ' con' : '');
-  a.innerHTML = `<img src="/fotos/${f.foto}" loading="lazy" alt=""><span>${hora(f.ts)}${f.aprox ? ' ≈' : ''} · ${f.n} pax</span>`;
+  a.innerHTML = `<img src="/fotos/${f.foto}" loading="lazy" alt=""><span>${f.sin_hora ? 'llegó ' : ''}${hora(f.ts)}${f.aprox && !f.sin_hora ? ' ≈' : ''} · ${f.n} pax${f.con_wifi ? ' · WiFi' : ''}</span>`;
   a.onclick = () => abrirVisor(lista, i);
   return a;
 }
@@ -262,26 +271,60 @@ async function cargarCarreras() {
   $('rPasajeros').textContent = resumen.pasajeros;
   $('rTiempo').textContent = durLarga(resumen.tiempo_s);
   $('rLarga').textContent = resumen.mas_larga_s ? durLarga(resumen.mas_larga_s) : '–';
-  $('avisoCarreras').textContent = resumen.descartadas ? `${resumen.descartadas} descartadas por durar menos de 30 s` : '';
+  $('avisoCarreras').textContent = [
+    resumen.descartadas ? `${resumen.descartadas} descartadas por durar menos de 30 s` : '',
+    resumen.por_revisar ? `${resumen.por_revisar} por revisar (con WiFi)` : ''].filter(Boolean).join(' · ');
   const lista = $('listaCarreras');
   lista.innerHTML = carreras.length ? '' : '<p class="m">No hubo carreras este día.</p>';
-  for (const c of carreras.slice().reverse()) {
-    const art = document.createElement('article');
-    art.className = 'card carrera' + (c.valida ? '' : ' descartada');
-    const fotos = c.fotos.slice(0, 5).map(f => `<img src="/fotos/${f}" loading="lazy" alt="">`).join('');
-    art.innerHTML = `
-      <div class="fila">
-        <div><div class="horas">${horaCorta(c.inicio)} → ${horaCorta(c.fin)}</div>
-          <div class="m">${durLarga(c.duracion)}${c.valida ? '' : ' · descartada (muy corta)'}</div></div>
-        <div class="pax"><b>${c.pasajeros}</b><span>pasajero${c.pasajeros === 1 ? '' : 's'}</span></div>
-      </div>
-      <div class="tira">${fotos}</div>
-      <div class="m">${lineaDeTiempo(c.eventos) || ''}</div>`;
-    art.onclick = () => abrirDetalle(c);
-    lista.appendChild(art);
-  }
+  for (const c of carreras.slice().reverse()) lista.appendChild(tarjetaCarrera(c, false));
+  cargarPorRevisar();
 }
 $('diaCarreras').onchange = cargarCarreras;
+
+// Tarjeta de una carrera. Las "por revisar" (hechas con fotos tomadas con WiFi:
+// la cámara podía estar en la casa del dueño subiendo lo grabado) traen los
+// botones para decidir si fue una carrera de verdad.
+function tarjetaCarrera(c, conFecha) {
+  const art = document.createElement('article');
+  art.className = 'card carrera' + (c.revisar ? ' revisar' : c.valida ? '' : ' descartada');
+  const fotos = c.fotos.slice(0, 5).map(f => `<img src="/fotos/${f}" loading="lazy" alt="">`).join('');
+  const estado = c.revisar ? ' · <b class="aviso-txt">por revisar: con WiFi</b>'
+    : !c.valida && c.con_wifi && c.duracion >= 30 ? ' · marcada como NO válida'
+    : !c.valida ? ' · descartada (muy corta)' : c.con_wifi ? ' · con WiFi, aprobada' : '';
+  art.innerHTML = `
+    <div class="fila">
+      <div><div class="horas">${conFecha ? new Date(c.inicio * 1000).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }) + ' · ' : ''}${horaCorta(c.inicio)} → ${horaCorta(c.fin)}</div>
+        <div class="m">${durLarga(c.duracion)}${estado}</div></div>
+      <div class="pax"><b>${c.pasajeros}</b><span>pasajero${c.pasajeros === 1 ? '' : 's'}</span></div>
+    </div>
+    <div class="tira">${fotos}</div>
+    <div class="m">${lineaDeTiempo(c.eventos) || ''}</div>` +
+    (c.revisar ? `<div class="decidir"><button class="si">Sí, fue una carrera</button><button class="no fantasma">No era carrera</button></div>` : '');
+  art.onclick = () => abrirDetalle(c);
+  if (c.revisar) {
+    art.querySelector('.si').onclick = e => { e.stopPropagation(); decidirCarrera(c, true, art); };
+    art.querySelector('.no').onclick = e => { e.stopPropagation(); decidirCarrera(c, false, art); };
+  }
+  return art;
+}
+
+async function decidirCarrera(c, valida, art) {
+  art.querySelectorAll('.decidir button').forEach(b => b.disabled = true);
+  await api(`/api/panel/taxi/${id}/carrera/${c.id}`, { valida });
+  cargarCarreras();
+}
+
+// Todas las carreras por revisar (de cualquier día), arriba de la lista.
+async function cargarPorRevisar() {
+  const pend = await api(`/api/panel/taxi/${id}/por_revisar`);
+  const caja = $('porRevisar');
+  caja.hidden = !pend.length;
+  if (!pend.length) return;
+  caja.innerHTML = `<div class="fila"><b>Por revisar (${pend.length})</b></div>
+    <p class="m">Se detectaron mientras la cámara tenía WiFi: puede que estuviera en la casa del dueño subiendo las fotos y contara a la gente de la casa.
+    No cuentan hasta que decidas. Toca una para ver sus fotos.</p><div class="lista-carreras"></div>`;
+  pend.forEach(c => caja.querySelector('.lista-carreras').appendChild(tarjetaCarrera(c, true)));
+}
 
 // ---------------------------------------------------------------- detalle de una carrera
 let detalleFotos = [];
@@ -365,6 +408,7 @@ let ultimaFoto = 0, fotosDia = [], carrerasFotos = [];
 const DESCRIPCION = {
   importantes: 'solo donde sube o baja alguien (más la primera y la última)',
   '': 'todas', pasajeros: 'con pasajeros', vacias: 'cabina vacía: revísalas para comprobar que de verdad no había nadie',
+  sin_hora: 'sin hora: la cámara no supo cuándo las tomó (se muestra la hora en que llegaron). No cuentan para las carreras',
 };
 async function cargarCarrerasFotos() {
   const dia = $('diaFotos').value;
@@ -604,6 +648,7 @@ function valorAjuste(k) {
   return String(typeof v === 'number' ? +v.toFixed(2) : v);
 }
 function pintarAjustes() {
+  if (document.activeElement !== $('contarConWifi')) $('contarConWifi').checked = !!datos.contar_con_wifi;
   if (!ajustesTocados) for (const s of selectsAjustes()) {
     const v = valorAjuste(s.dataset.k);
     if (v !== null && [...s.options].some(o => o.value === v)) s.value = v;
@@ -615,6 +660,10 @@ function pintarAjustes() {
       ? '<b style="color:var(--acc)">Pendiente:</b> la cámara los aplica cuando envíe su próxima foto (si está sin internet, al volver a conectarse).'
       : '<span class="ok">✓ La cámara tiene estos ajustes.</span>';
 }
+$('contarConWifi').onchange = async () => {
+  await api('/api/panel/taxi/' + id, { contar_con_wifi: $('contarConWifi').checked });
+  await cargar();
+};
 $('guardarAjustes').onclick = async () => {
   const ajustes = {};
   for (const s of selectsAjustes()) ajustes[s.dataset.k] = s.dataset.k === 'model' || s.dataset.k === 'fs' ? s.value : +s.value;

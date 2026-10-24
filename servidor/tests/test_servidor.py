@@ -389,6 +389,63 @@ def test_panel_muestra_si_llega_informacion(srv):
     assert estado()["estado"] == "recibiendo"
 
 
+def test_carrera_con_wifi_queda_por_revisar_y_se_decide(srv):
+    """Fotos tomadas con WiFi (la cámara en casa del dueño subiendo lo grabado):
+    la carrera no cuenta sola, queda por revisar; en el panel se aprueba o rechaza."""
+    _, cli, personas = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}"}
+    t0 = __import__("time").time() - 7200
+    con_wifi = 0x40000000
+    personas.append(PERSONA)
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 1 | con_wifi) for i in range(60)]))
+    personas.clear()
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 0 | con_wifi) for i in range(60, 95)]))
+    dia = __import__("datetime").datetime.fromtimestamp(t0).strftime("%Y-%m-%d")
+    r = cli.get(f"/api/panel/taxi/TX-000001/carreras?dia={dia}", headers=PANEL).json()
+    assert r["resumen"]["carreras"] == 0 and r["resumen"]["por_revisar"] == 1 and r["resumen"]["descartadas"] == 0
+    pend = cli.get("/api/panel/taxi/TX-000001/por_revisar", headers=PANEL).json()
+    assert len(pend) == 1 and pend[0]["con_wifi"] == 1
+    assert cli.get("/api/panel/taxi/TX-000001", headers=PANEL).json()["por_revisar"] == 1
+    # La cámara no ve su conteo con la marca de WiFi mezclada.
+    assert cli.get("/api/panel/taxi/TX-000001", headers=PANEL).json()["pax_esp"] == 0
+    assert cli.post(f"/api/panel/taxi/TX-000001/carrera/{pend[0]['id']}", headers=PANEL, json={"valida": True}).status_code == 200
+    r = cli.get(f"/api/panel/taxi/TX-000001/carreras?dia={dia}", headers=PANEL).json()
+    assert r["resumen"]["carreras"] == 1 and r["resumen"]["por_revisar"] == 0
+    assert cli.get("/api/panel/taxi/TX-000001/por_revisar", headers=PANEL).json() == []
+    # Reanalizar el día conserva la decisión.
+    cli.post("/api/panel/taxi/TX-000001/reanalizar", headers=PANEL, json={"dia": dia, "aplicar": True})
+    assert cli.get(f"/api/panel/taxi/TX-000001/carreras?dia={dia}", headers=PANEL).json()["resumen"]["carreras"] == 1
+
+
+def test_con_wifi_cuenta_si_el_taxi_usa_hotspot(srv):
+    _, cli, personas = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}"}
+    cli.post("/api/panel/taxi/TX-000001", headers=PANEL, json={"contar_con_wifi": True})
+    t0 = __import__("time").time() - 7200
+    personas.append(PERSONA)
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 1 | 0x40000000) for i in range(60)]))
+    personas.clear()
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(t0 + i, 0x40000000) for i in range(60, 95)]))
+    dia = __import__("datetime").datetime.fromtimestamp(t0).strftime("%Y-%m-%d")
+    r = cli.get(f"/api/panel/taxi/TX-000001/carreras?dia={dia}", headers=PANEL).json()["resumen"]
+    assert r["carreras"] == 1 and r["por_revisar"] == 0
+
+
+def test_foto_sin_hora_va_aparte_y_no_arma_carreras(srv):
+    """Sin ninguna hora: no se mezcla en la línea del tiempo ni cuenta para carreras."""
+    _, cli, personas = srv
+    tok = registrar(cli)
+    h = {"X-Dispositivo": "TX-000001", "Authorization": f"Bearer {tok}"}
+    personas.append(PERSONA)
+    cli.post("/api/v1/lote", headers=h, content=lote_bytes([(0, 1) for _ in range(60)]))
+    dia = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
+    q = lambda f: cli.get(f"/api/panel/taxi/TX-000001/fotos?dia={dia}&filtro={f}&limite=2000", headers=PANEL).json()
+    assert q("") == [] and len(q("sin_hora")) == 60 and q("sin_hora")[0]["sin_hora"]
+    assert cli.get("/api/panel/taxi/TX-000001", headers=PANEL).json()["estado"] == "LIBRE"
+
+
 def test_fotos_de_tarde_a_temprano(srv):
     """orden=desc: la última primero; 'ver más' con hasta= sigue hacia atrás sin repetir."""
     _, cli, personas = srv
@@ -474,12 +531,13 @@ def test_hora_estimada_por_la_camara_se_respeta_y_queda_aproximada(srv):
 
 
 def test_foto_sin_hora_queda_aproximada(srv):
+    """Sin hora: va en el filtro "sin_hora" (con la hora de llegada, marcada aproximada)."""
     _, cli, _ = srv
     tok = registrar(cli)
     enviar(cli, tok, 0)
     dia = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
-    fotos = cli.get(f"/api/panel/taxi/TX-000001/fotos?dia={dia}", headers=PANEL).json()
-    assert fotos and fotos[0]["aprox"]
+    fotos = cli.get(f"/api/panel/taxi/TX-000001/fotos?dia={dia}&filtro=sin_hora", headers=PANEL).json()
+    assert fotos and fotos[0]["aprox"] and fotos[0]["sin_hora"]
 
 
 # ------------------------------------------------------------------ panel

@@ -4,6 +4,30 @@ Lo más nuevo arriba. La seguridad y el cifrado se explican en detalle en [SEGUR
 
 ---
 
+## Firmware 4.0 y servidor: carreras "por revisar" y fotos sin hora (probado y publicado)
+
+**Problema 1 — fotos mezcladas en la galería**
+- Algunas fotos viejas llegaban **sin ninguna hora**, porque la cuenta de los encendidos se cortaba si uno de ellos había durado tan poco que no alcanzó a anotarse.
+- El servidor les ponía la hora de llegada, así que quedaban intercaladas con las fotos reales de ese momento y podían armar carreras falsas.
+
+**Problema 2 — carreras falsas en la casa del dueño**
+- Con WiFi, la cámara suele estar en la casa del dueño subiendo lo grabado, y la gente de la casa contaba como carrera.
+
+**Cambios**
+- **Cámara:**
+  - un encendido sin anotar ya no corta la cuenta de la hora;
+  - cada encendido se anota apenas arranca;
+  - cada foto lleva la marca **"tomada con WiFi"** (un bit en el conteo de la cámara).
+- **Servidor, fotos sin hora:** van al filtro **"Sin hora"** de la pestaña Fotos, con su hora de llegada. No se mezclan en la línea del tiempo ni cuentan para carreras.
+- **Servidor, carreras con WiFi:** quedan **"por revisar"** y no cuentan. En la pestaña Carreras aparecen arriba, con **"Sí, fue una carrera"** / **"No era carrera"**. El inicio muestra cuántas hay por taxi.
+- **Ajuste por taxi** (pestaña Ajustes): "El conductor usa internet en el taxi (hotspot)". Si se activa, esas carreras cuentan sin revisar.
+- **Reanalizar un día conserva las decisiones** tomadas sobre carreras con WiFi.
+- **Datos existentes:** 1625 fotos que estaban mezcladas (22 y 23 de octubre) pasaron a "sin hora", y se rearmaron las carreras de esos días.
+  - El **22** quedó con **12** válidas; antes tenía **10**.
+  - El **23** quedó con **2** válidas; antes tenía **6**.
+
+---
+
 ## Firmware 3.9 (probado en la placa y publicado en el servidor)
 
 **Probado el 23/10/2026:**

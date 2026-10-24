@@ -45,7 +45,7 @@ async function cargar() {
       <a class="card taxi" href="/taxi/${t.id}">
         <img src="${t.ultima_foto ? '/fotos/' + t.ultima_foto : ''}" alt="">
         <div class="fila"><b>${esc(t.nombre || t.id)}</b>${pill(t)}</div>
-        <div class="m">${t.id}${t.aprobado ? '' : ' · <span class="mal">pendiente de aprobar</span>'}</div>
+        <div class="m">${t.id}${t.aprobado ? '' : ' · <span class="mal">pendiente de aprobar</span>'}${t.por_revisar ? ` · <span class="aviso-txt">${t.por_revisar} carrera${t.por_revisar === 1 ? '' : 's'} por revisar</span>` : ''}</div>
         <div class="k">
           <div><b>${t.pax}</b><span>pasajeros</span></div>
           <div><b>${t.carreras_hoy}</b><span>carreras hoy</span></div>

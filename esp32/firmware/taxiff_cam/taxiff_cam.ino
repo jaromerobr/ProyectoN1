@@ -39,6 +39,7 @@
 // del resto del código, y algunas usan este tipo.
 struct Red { String ssid, pass; };  // una red WiFi guardada
 struct BootRec { uint32_t boot, start, dur; };  // un arranque; start: hora (s) de inicio, 0 = no la supo
+const int32_t FOTO_CON_WIFI = 0x40000000;       // bit en el conteo de una foto: se tomó con WiFi
 
 // ---- Pines de cámara (ESP32-S3-EYE / Freenove S3 CAM) ----------------------
 #define XCLK_GPIO_NUM 15
@@ -209,7 +210,7 @@ void removeNetwork(const String &ssid) {
 // (TX-XXXXXX, de la MAC) y el token que el servidor le da al registrarse.
 // Sin internet, las fotos se guardan en /q y se suben después, las más viejas
 // primero.
-const char *FW_VERSION = "3.9";
+const char *FW_VERSION = "4.0";
 char devId[12];
 String srvUrl, devToken;
 char srvState[64] = "sin servidor configurado";
@@ -1293,7 +1294,9 @@ uint64_t estimateMs(uint32_t boot, uint32_t ms) {
       uint64_t now = nowMs();
       return now ? ((now - millis()) - before) | TS_APROX : 0;
     }
-    if (!bootRec(b, r)) return 0;
+    // Un arranque que no alcanzó a anotarse (se cortó la corriente al toque)
+    // no corta la cuenta: se toma su duración de sus fotos (o 0 si no tiene).
+    if (!bootRec(b, r)) r = {b, 0, 0};
     if (r.start) return ((uint64_t)r.start * 1000 - before) | TS_APROX;
     before += bootDuration(b, r.dur);
   }
@@ -1834,7 +1837,10 @@ void uploadTask(void *) {
       size_t len = lastLen;
       uint8_t *buf = lastJpg && len ? (uint8_t *)ps_malloc(len) : nullptr;
       if (buf) memcpy(buf, lastJpg, len);
-      int n = paxNow;
+      // Marca de "tomada con WiFi": con internet la cámara suele estar en la casa
+      // del dueño subiendo lo grabado, no en el taxi. El servidor deja esas
+      // carreras "por revisar" en vez de contarlas.
+      int n = paxNow | (WiFi.status() == WL_CONNECTED ? FOTO_CON_WIFI : 0);
       xSemaphoreGive(lock);
       if (buf) {
         uint64_t ts = nowMs();
@@ -2048,6 +2054,7 @@ void setup() {
   prefs.putUInt(key.c_str(), prefs.getUInt(key.c_str(), 0) + 1);
   bootN = prefs.getUInt("bootn", 0) + 1;  // para corregir la hora de fotos tomadas sin internet
   prefs.putUInt("bootn", bootN);
+  updateBootRec();  // el arranque queda anotado aunque se corte la corriente enseguida
   sinWifi = bootN <= prefs.getUInt("sinw", 0);  // prueba SINWIFI: hasta ese arranque
   bootHistory = "";
   for (int r = 0; r <= 15; r++) {
