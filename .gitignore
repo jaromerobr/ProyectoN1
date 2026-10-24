@@ -58,6 +58,10 @@ build_esp32/
 /servidor/modelos/
 .pytest_cache/
 __pycache__/
+# Despliegue: entorno de la librería de Oracle y resultados del script
+/servidor/despliegue/.venv-oci/
+/servidor/despliegue/oracle_reintentos.log
+/servidor/despliegue/oracle_resultado.json
 # Clave de administración de las cámaras (la crea cargar_firmware.ps1)
 /esp32/firmware/taxiff_cam/secretos.h
 # Notas personales
