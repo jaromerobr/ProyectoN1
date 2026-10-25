@@ -1,4 +1,30 @@
-# Pasar el servidor a internet (sin la PC prendida)
+# Pasar el servidor a internet
+
+## Lo elegido (25/10/2026): la PC de la casa + `taxiff.site` con túnel fijo de Cloudflare
+
+Oracle gratis no dio lugar en Bogotá (217 intentos en 2 días), así que el servidor sigue en la PC, pero con dirección fija:
+
+```
+Cámara / celular ──HTTPS──► taxiff.site (Cloudflare) ──túnel fijo──► esta PC (servidor Taxiff, puerto 8000)
+```
+
+| Pieza | Dónde | Qué hace |
+|---|---|---|
+| `servidor/.env` | Solo en la PC (no va a GitHub) | Clave del panel. Las cámaras nuevas quedan pendientes hasta aprobarlas |
+| `despliegue/tunel_fijo.ps1` | Se corre una vez | Crea el túnel `taxiff` y apunta `taxiff.site` y `www` a esta PC |
+| `despliegue/servidor_siempre.ps1` | Corre siempre | Mantiene prendidos el servidor y el túnel (si se caen, los levanta) y no deja que la PC se suspenda |
+| `despliegue/instalar_arranque.ps1` | Se corre una vez | Tarea programada "Taxiff servidor": todo arranca solo al iniciar sesión en Windows (`-Quitar` la borra) |
+
+**Requisitos:**
+- La PC prendida, con sesión iniciada y con internet.
+- Si se reinicia, hay que iniciar sesión para que todo arranque.
+- Registro de lo que pasa: `servidor/datos/logs/siempre.log`.
+
+El resto de este documento queda como referencia por si más adelante se pasa a un servidor en internet.
+
+---
+
+# Opciones de servidor en internet (referencia)
 
 Plan para las pruebas con 1 o 2 taxis. Todavía **no se compró nada**: primero se elige la opción.
 
