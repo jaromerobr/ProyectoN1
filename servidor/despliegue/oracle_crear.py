@@ -167,6 +167,13 @@ def main():
     while time.time() < fin:
         nucleos, ram = TAMANOS[intento % len(TAMANOS)]
         intento += 1
+        # Antes de cada intento: si alguien ya lo creó (a mano o con otra copia
+        # del script), no se crea un segundo servidor.
+        existente = por_nombre(comp_cli.list_instances(comp).data, NOMBRE)
+        if existente:
+            anotar(f"ya existe {NOMBRE} ({existente.lifecycle_state}): no se crea otro")
+            terminar(comp_cli, red, comp, existente)
+            return
         try:
             inst = comp_cli.launch_instance(oci.core.models.LaunchInstanceDetails(
                 availability_domain=ad, compartment_id=comp, display_name=NOMBRE, shape=FORMA,
