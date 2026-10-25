@@ -6,6 +6,12 @@
 > - [DESPLIEGUE.md](DESPLIEGUE.md): pasar el servidor a internet y sus costos.
 >
 > **Desde el firmware 3.9**, la página de la cámara pide **usuario `admin`** y la clave de `esp32/firmware/taxiff_cam/secretos.h`.
+>
+> **Desde el 25/10/2026 el servidor tiene dirección fija: https://taxiff.site**
+> - **Panel:** usuario `admin` y la clave de `servidor/.env` (`TAXIFF_CLAVE_PANEL`).
+> - **Arranque:** la PC lo arranca sola al iniciar sesión (tarea "Taxiff servidor"), junto con el túnel fijo.
+> - **Ya no hace falta** `iniciar_pc.ps1 -Tunel` ni reconfigurar la cámara: siempre envía a `https://taxiff.site`.
+> - **Detalles:** [DESPLIEGUE.md](DESPLIEGUE.md).
 
 Todo se escribe en **PowerShell**. En VS Code: *Terminal → New Terminal*.
 Las rutas son de esta PC (`C:\Users\ASUS Vivobook\Desktop\taxiff`). En otra PC, cámbialas por donde esté el repositorio.

@@ -41,11 +41,12 @@ Write-Host "Túnel '$Nombre': $id"
 & $cf tunnel route dns --overwrite-dns $Nombre $Dominio | Out-Host
 & $cf tunnel route dns --overwrite-dns $Nombre "www.$Dominio" | Out-Host
 
-# 4. Qué atiende el túnel: todo va al servidor Taxiff de esta PC.
+# 4. Qué atiende el túnel: todo va al servidor Taxiff de esta PC. (La ruta va entre
+#    comillas simples: con dobles, YAML lee "\U" de "C:\Users" como un código especial.)
 $cred = Join-Path $dir "$id.json"
 @"
 tunnel: $id
-credentials-file: "$cred"
+credentials-file: '$cred'
 ingress:
   - hostname: $Dominio
     service: http://localhost:$Puerto
