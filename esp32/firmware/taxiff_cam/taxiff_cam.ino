@@ -210,7 +210,7 @@ void removeNetwork(const String &ssid) {
 // (TX-XXXXXX, de la MAC) y el token que el servidor le da al registrarse.
 // Sin internet, las fotos se guardan en /q y se suben después, las más viejas
 // primero.
-const char *FW_VERSION = "4.0";
+const char *FW_VERSION = "4.1";
 char devId[12];
 String srvUrl, devToken;
 char srvState[64] = "sin servidor configurado";
@@ -358,52 +358,74 @@ void updateTrip(int n, uint32_t now) {
 
 // ---- Página web ---------------------------------------------------------------
 static const char PAGE[] PROGMEM = R"HTML(<!doctype html><html lang="es"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Taxiff Cam</title><style>
-:root{--bg:#0b0b0d;--card:#17171a;--mut:#9a9aa2;--acc:#ff9f0a;--ok:#30c26b}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f2f2f5;font:15px/1.4 system-ui,Segoe UI,Roboto,sans-serif}
-header{padding:16px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}h1{font-size:20px;margin:0 8px 0 0}
-.pill{padding:5px 12px;border-radius:999px;font-weight:800;font-size:13px;background:#2a2a2e}
-main{display:grid;grid-template-columns:minmax(0,2fr) minmax(260px,1fr);gap:14px;padding:0 20px 20px}
-@media(max-width:820px){main{grid-template-columns:1fr}}
-.card{background:var(--card);border-radius:22px;padding:16px}canvas{width:100%;border-radius:14px;background:#000;display:block}
-.k{display:grid;grid-template-columns:1fr 1fr;gap:12px}.k b{display:block;font-size:32px}.k span{color:var(--mut);font-size:13px}
-table{width:100%;border-collapse:collapse;font-size:14px}td{padding:6px 4px;border-bottom:1px solid #2a2a2e}
-.m{color:var(--mut);font-size:13px}#timer{font-size:44px;font-weight:300}
+:root{--bg:#f2f2f4;--card:#fff;--c2:#f0f0f3;--fg:#111114;--m:#6f6f76;--acc:#0a6cff;--ok:#1f9d55;--okbg:#dff3e6;--warn:#e08600;--warnbg:#fdefd8;--bad:#e5352b;--lin:#e4e4e8}
+@media(prefers-color-scheme:dark){:root{--bg:#000;--card:#1a1a1c;--c2:#252528;--fg:#f4f4f6;--m:#9b9ba3;--acc:#3e91ff;--ok:#3ddc84;--okbg:#173a26;--warn:#ffb03a;--warnbg:#3d2c12;--bad:#ff5a50;--lin:#2c2c30}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{max-width:1200px;margin:0 auto;padding:16px 16px 8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+h1{font-size:20px;margin:0}
+.pill{padding:4px 11px;border-radius:99px;font-weight:700;font-size:12px;letter-spacing:.02em;background:var(--c2);color:var(--m)}
+.pill.verde{background:var(--okbg);color:var(--ok)}.pill.amarillo{background:var(--warnbg);color:var(--warn)}
+main{max-width:1200px;margin:0 auto;padding:4px 16px 28px;display:grid;grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);gap:14px;align-items:start}
+@media(max-width:860px){main{grid-template-columns:1fr}}
+.col{display:grid;gap:14px;min-width:0}
+.card{background:var(--card);border-radius:22px;padding:14px 16px;min-width:0}
+canvas{width:100%;height:auto;border-radius:16px;background:#000;display:block}
+.k{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.k div{background:var(--c2);border-radius:14px;padding:10px 12px}.k b{display:block;font-size:24px;line-height:1.2}.k span{color:var(--m);font-size:12px}
+@media(max-width:520px){.k{grid-template-columns:1fr 1fr}}
+#timer{font-size:42px;font-weight:300;line-height:1.1}
+details{background:var(--card);border-radius:22px;padding:2px 16px}
+summary{cursor:pointer;font-weight:700;padding:13px 0;list-style:none;display:flex;justify-content:space-between;align-items:center}
+summary::-webkit-details-marker{display:none}summary::after{content:"+";color:var(--m);font-size:20px;font-weight:400}
+details[open] summary::after{content:"\2013"}details>div{padding-bottom:14px}
+.ajustes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:520px){.ajustes{grid-template-columns:1fr}}
+label{display:block;font-size:13px;color:var(--m)}
+select,input{width:100%;margin-top:4px;padding:11px 12px;border-radius:12px;border:1px solid var(--lin);background:var(--c2);color:var(--fg);font-size:15px;outline:none}
+select:focus,input:focus{border-color:var(--acc)}
+button{border:0;border-radius:99px;padding:11px 18px;font-weight:700;font-size:15px;background:var(--acc);color:#fff;cursor:pointer}
+button.sec{background:var(--c2);color:var(--fg)}
+.fila{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.fila button{flex:1}
+.m{color:var(--m);font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:14px}td{padding:8px 4px;border-top:1px solid var(--lin)}tr:first-child td{border-top:0}
+.barra{height:8px;background:var(--c2);border-radius:4px;margin:4px 0 12px;overflow:hidden}.barra i{display:block;height:100%;border-radius:4px}
 </style></head><body>
 <header><h1>Taxiff Cam</h1><span id="st" class="pill">…</span><span class="m" id="net"></span></header>
-<main><section class="card"><canvas id="v" width="640" height="480"></canvas>
-<p class="m">Todo se calcula en el ESP32: detección, conteo y carreras. Modelo: <b id="mname">–</b></p></section>
-<aside style="display:grid;gap:14px;align-content:start">
-<div class="card"><div class="m">Carrera</div><div id="timer">00:00</div><div class="m" id="tdet"></div></div>
+<main><div class="col">
+<section class="card"><canvas id="v" width="640" height="480"></canvas>
+<p class="m" style="margin:10px 2px 0">Detección, conteo y carreras se calculan en la cámara. Modelo: <b id="mname">–</b></p></section>
 <div class="card k"><div><b id="n" style="color:var(--ok)">0</b><span>personas</span></div>
-<div><b id="ms">–</b><span>ms detección</span></div><div><b id="fps">–</b><span>fps cámara</span></div>
+<div><b id="ms">–</b><span>ms detección</span></div><div><b id="fps">–</b><span>fotos por seg.</span></div>
 <div><b id="tc">0</b><span>carreras</span></div></div>
-<div class="card"><div class="m" style="margin-bottom:6px">Carreras guardadas</div><table id="tr"></table></div>
-<div class="card"><div class="m" style="margin-bottom:8px">Ajustes de cámara y detección</div>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-<label class="m">Resolución (reinicia)<br><select id="fs"><option value="qvga">320x240 (rápido)</option><option value="vga">640x480 (más alcance)</option></select></label>
-<label class="m">Alcance del detector<br><select id="scale"><option value="0.2">Corto (rápido)</option><option value="0.3">Medio</option><option value="0.4">Largo</option><option value="0.5">Muy largo (lento)</option></select></label>
-<label class="m">Calidad imagen<br><select id="q"><option value="40">Baja</option><option value="60">Media</option><option value="80">Alta</option></select></label>
-<label class="m">Qué detecta<br><select id="model"><option value="personas">Cabezas (modelo propio)</option><option value="caras">Caras (Espressif)</option></select></label>
-<label class="m">Unir detecciones cercanas<br><select id="mrg"><option value="0.0">No unir</option><option value="1.5">Poco</option><option value="2.5">Normal</option><option value="4.0">Mucho</option></select></label>
-<label class="m">Sensibilidad cabezas<br><select id="pthr"><option value="0.30">Alta (cuenta más)</option><option value="0.40">Media-alta</option><option value="0.50">Normal</option><option value="0.65">Baja (menos errores)</option></select></label>
-<label class="m">Detección en el ESP32<br><select id="det"><option value="1">Sí</option><option value="0">No (solo cámara)</option></select></label>
-<label class="m">Orientación<br><select id="rot"><option value="0">Normal</option><option value="1">Girada 180°</option></select></label>
-<label class="m">Modo noche<br><select id="night"><option value="0">No</option><option value="1">Sí</option></select></label>
-</div></div>
-<div class="card"><div class="m" style="margin-bottom:8px">Servidor Taxiff</div>
+</div>
+<aside class="col">
+<div class="card"><div class="m">Carrera</div><div id="timer">00:00</div><div class="m" id="tdet"></div></div>
+<details><summary>Servidor Taxiff</summary><div>
 <div class="m">Esta cámara: <b id="devid">–</b></div>
-<input id="srv" placeholder="Dirección del servidor (https…)" style="width:100%;margin:8px 0;padding:10px;border-radius:12px;border:1px solid #444;background:#0f0f12;color:#fff">
-<button id="srvsave" style="padding:10px 16px;border-radius:12px;border:0;background:#ff9f0a;font-weight:800">Guardar servidor</button>
-<div id="srvinfo" class="m" style="margin-top:8px"></div></div>
-<div class="card"><div class="m" style="margin-bottom:8px">Fotos para entrenar el modelo</div>
-<label class="m">Guardar automáticamente<br><select id="cap"><option value="0">No</option><option value="2">Cada 2 s</option><option value="5">Cada 5 s</option><option value="10">Cada 10 s</option></select></label>
-<div style="display:flex;gap:8px;margin:10px 0"><button id="capnow" style="flex:1;padding:10px;border-radius:12px;border:0;background:#ff9f0a;font-weight:800">Guardar foto ahora</button>
-<button id="capdel" style="padding:10px;border-radius:12px;border:1px solid #444;background:none;color:#f2f2f5">Borrar todas</button></div>
-<div id="capinfo" class="m"></div></div>
-<div class="card"><div class="m" style="margin-bottom:8px">Temperatura y carga</div><div id="met" class="m"></div></div>
-<div class="card m" id="sys"></div></aside></main>
+<input id="srv" placeholder="Dirección del servidor (https…)" autocapitalize="none" style="margin:10px 0 8px">
+<button id="srvsave">Guardar servidor</button>
+<div id="srvinfo" class="m" style="margin-top:10px"></div></div></details>
+<details><summary>Ajustes de cámara y detección</summary><div class="ajustes">
+<label>Resolución (reinicia)<select id="fs"><option value="qvga">320x240 (rápido)</option><option value="vga">640x480 (más alcance)</option></select></label>
+<label>Alcance del detector<select id="scale"><option value="0.2">Corto (rápido)</option><option value="0.3">Medio</option><option value="0.4">Largo</option><option value="0.5">Muy largo (lento)</option></select></label>
+<label>Calidad imagen<select id="q"><option value="40">Baja</option><option value="60">Media</option><option value="80">Alta</option></select></label>
+<label>Qué detecta<select id="model"><option value="personas">Cabezas (modelo propio)</option><option value="caras">Caras (Espressif)</option></select></label>
+<label>Unir detecciones cercanas<select id="mrg"><option value="0.0">No unir</option><option value="1.5">Poco</option><option value="2.5">Normal</option><option value="4.0">Mucho</option></select></label>
+<label>Sensibilidad cabezas<select id="pthr"><option value="0.30">Alta (cuenta más)</option><option value="0.40">Media-alta</option><option value="0.50">Normal</option><option value="0.65">Baja (menos errores)</option></select></label>
+<label>Detección en la cámara<select id="det"><option value="1">Sí</option><option value="0">No (solo cámara)</option></select></label>
+<label>Orientación<select id="rot"><option value="0">Normal</option><option value="1">Girada 180°</option></select></label>
+<label>Modo noche<select id="night"><option value="0">No</option><option value="1">Sí</option></select></label>
+</div></details>
+<details><summary>Temperatura y carga</summary><div id="met" class="m"></div></details>
+<details><summary>Carreras guardadas</summary><div><table id="tr"></table></div></details>
+<details><summary>Fotos para entrenar el modelo</summary><div>
+<label>Guardar automáticamente<select id="cap"><option value="0">No</option><option value="2">Cada 2 s</option><option value="5">Cada 5 s</option><option value="10">Cada 10 s</option></select></label>
+<div class="fila"><button id="capnow">Guardar foto ahora</button><button id="capdel" class="sec">Borrar todas</button></div>
+<div id="capinfo" class="m"></div></div></details>
+<details><summary>Sistema</summary><div class="m" id="sys"></div></details>
+</aside></main>
 <script>
 const v=document.getElementById('v'),c=v.getContext('2d');const $=i=>document.getElementById(i);
 const two=x=>String(x).padStart(2,'0');const dur=s=>two(Math.floor(s/60))+':'+two(s%60);
@@ -411,27 +433,26 @@ async function frame(){try{const r=await fetch('/frame?'+Date.now());const d=JSO
 const img=await createImageBitmap(await r.blob());v.width=img.width*2;v.height=img.height*2;c.drawImage(img,0,0,v.width,v.height);
 c.lineWidth=4;c.font='bold 22px system-ui';const k=v.width/img.width,fomo=$('model').value=='personas';
 for(const[x1,y1,x2,y2,s]of d.b||[]){c.strokeStyle=c.fillStyle='#30c26b';const t='pasajero '+Math.round(s*100)+'%';let lx=x1*k,ly=y1*k;
-// FOMO solo marca el centro de la cabeza (no su tamaño): se dibuja un punto.
 if(fomo){const cx=(x1+x2)/2*k,cy=(y1+y2)/2*k;c.beginPath();c.arc(cx,cy,14,0,7);c.fill();c.beginPath();c.arc(cx,cy,26,0,7);c.stroke();lx=cx-26;ly=cy-30;}
 else c.strokeRect(x1*k,y1*k,(x2-x1)*k,(y2-y1)*k);
 const w=c.measureText(t).width+12;c.fillRect(lx,Math.max(0,ly-28),w,26);c.fillStyle='#000';c.fillText(t,lx+6,Math.max(20,ly-8));}
 $('n').textContent=d.pax;$('ms').textContent=d.ms;$('fps').textContent=d.fps;
-const st=['LIBRE','CONFIRMANDO','EN CARRERA'][d.state];$('st').textContent=st;$('st').style.background=d.state==2?'#1f3d2a':d.state==1?'#4a3a10':'#2a2a2e';
+const st=['LIBRE','CONFIRMANDO','EN CARRERA'][d.state];$('st').textContent=st;$('st').className='pill'+(d.state==2?' verde':d.state==1?' amarillo':'');
 $('timer').textContent=dur(d.trip_s||0);$('tdet').textContent=d.state==2?(d.zero_s?('Sin pasajeros · cierra en '+Math.max(0,20-d.zero_s)+' s'):('máx. '+d.max+' pasajero(s)')):'Esperando pasajeros';
 }catch(e){}setTimeout(frame,120)}
 async function info(){try{const d=await (await fetch('/status')).json();$('tc').textContent=d.trips.length;
 $('tr').innerHTML=d.trips.length?d.trips.slice().reverse().map(t=>`<tr><td>${t.inicio}</td><td>${dur(t.dur)}</td><td>${t.max} pax</td></tr>`).join(''):'<tr><td class="m">Aún no hay carreras</td></tr>';
 $('net').textContent=d.net;$('sys').innerHTML=`Arranque: <b>${d.boot}</b><br>Reinicios: ${d.hist}<br>Encendido: ${dur(d.up)} · RAM libre ${d.heap} KB · PSRAM libre ${d.psram} KB<br>WiFi: ${d.rssi} dBm · descartadas: ${d.discarded}`;
-const tc=d.temp>=80?'#f2453d':d.temp>=65?'#ff9f0a':'#30c26b';
-const bar=(v,c)=>`<div style="height:8px;background:#2a2a2e;border-radius:4px;margin:4px 0 10px"><div style="height:8px;width:${Math.min(100,v)}%;background:${c};border-radius:4px"></div></div>`;
+const tc=d.temp>=80?'var(--bad)':d.temp>=65?'var(--warn)':'var(--ok)';
+const bar=(v,c)=>`<div class="barra"><i style="width:${Math.min(100,v)}%;background:${c}"></i></div>`;
 $('devid').textContent=d.id;if(document.activeElement!==$('srv'))$('srv').value=d.srv;
 $('srvinfo').textContent=d.srv?`${d.srv_estado} · ${d.enviadas} fotos enviadas${d.ult_envio_s>=0?' (última hace '+d.ult_envio_s+' s)':''} · ${d.en_cola} en cola sin internet · ritmo ${d.intervalo_ms/1000} s`:'No envía a ningún servidor.';
 $('mname').textContent=d.cfg.model=='caras'?'caras (Espressif)':d.modelo;
 const mb=d.fotos_libre_kb/1024,libre=mb>=1024?(mb/1024).toFixed(1)+' GB':mb.toFixed(1)+' MB';
 $('capinfo').textContent=(d.almacen=='sd'?`Tarjeta SD de ${d.sd_gb} GB`:d.almacen=='interna'?'Sin tarjeta SD: memoria interna':'Sin memoria')+` · ${d.fotos} fotos guardadas · libre ${libre} (≈ ${Math.floor(d.fotos_libre_kb/12).toLocaleString()} fotos más)`;
-$('met').innerHTML=(d.cam_ok?'':'<b style="color:#f2453d">LA CÁMARA NO ENVÍA IMAGEN: reiniciándola…</b><br>')+(d.cam_reinits?`Reinicios de cámara: ${d.cam_reinits}<br>`:'')+`Temperatura del chip: <b style="color:${tc};font-size:20px">${d.temp} °C</b> (máx. ${d.tmax} °C)${d.hot?' · <b style="color:#f2453d">MUY CALIENTE: va más lento para enfriarse</b>':''}${bar(d.temp,tc)}`+
-`CPU ocupada: <b>${d.busy}%</b>${bar(d.busy,d.busy>85?'#ff9f0a':'#30c26b')}`+
-`Por foto: cámara ${d.cam_ms} ms · detección ${d.det_ms} ms · JPEG ${d.jpg_ms} ms<br>Enviando a la PC: ${d.kbs} KB/s (≈ ${Math.round(d.kbs*3.6)} MB/hora) · ${d.fps} fps`;}catch(e){}setTimeout(info,2000)}
+$('met').innerHTML=(d.cam_ok?'':'<b style="color:var(--bad)">LA CÁMARA NO ENVÍA IMAGEN: reiniciándola…</b><br>')+(d.cam_reinits?`Reinicios de cámara: ${d.cam_reinits}<br>`:'')+`Temperatura del chip: <b style="color:${tc};font-size:20px">${d.temp} °C</b> (máx. ${d.tmax} °C)${d.hot?' · <b style="color:var(--bad)">MUY CALIENTE: va más lento para enfriarse</b>':''}${bar(d.temp,tc)}`+
+`CPU ocupada: <b>${d.busy}%</b>${bar(d.busy,d.busy>85?'var(--warn)':'var(--ok)')}`+
+`Por foto: cámara ${d.cam_ms} ms · detección ${d.det_ms} ms · JPEG ${d.jpg_ms} ms<br>Enviando al servidor: ${d.kbs} KB/s (≈ ${Math.round(d.kbs*3.6)} MB/hora) · ${d.fps} fps`;}catch(e){}setTimeout(info,2000)}
 const KS=['fs','scale','q','night','det','model','pthr','mrg','rot','cap'];
 $('srvsave').onclick=()=>fetch('/set?srv='+encodeURIComponent($('srv').value.trim())).then(()=>setTimeout(info,500));
 $('capnow').onclick=()=>fetch('/set?capnow=1').then(()=>setTimeout(info,600));

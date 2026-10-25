@@ -60,8 +60,10 @@ function filaCarrera(c, conTaxi) {
   const distintos = c.pasajeros ?? c.max_pax;
   const pax = `<b>${distintos}</b>${distintos !== c.max_pax ? ` <span class="m">(máx. ${c.max_pax} a la vez)</span>` : ''}`;
   const linea = lineaDeTiempo(c.eventos);
-  return `<tr class="${c.valida ? '' : 'descartada'}"><td>${new Date(c.inicio * 1000).toLocaleString('es-ES')}` +
+  // Las clases c-* permiten mostrar cada fila como tarjeta en el teléfono (estilo.css).
+  return `<tr class="${c.valida ? '' : 'descartada'}${c.revisar ? ' revisar' : ''}"><td class="c-ini">${new Date(c.inicio * 1000).toLocaleString('es-ES')}` +
     (linea ? `<div class="m">${linea}</div>` : '') + `</td>` +
-    (conTaxi ? `<td><a href="/taxi/${c.dispositivo}">${esc(c.nombre || c.dispositivo)}</a></td>` : '') +
-    `<td>${dur(c.duracion)}${c.valida ? '' : ' <span class="m">(descartada: menos de 30 s)</span>'}</td><td>${pax}</td><td>${fotos}</td></tr>`;
+    (conTaxi ? `<td class="c-taxi"><a href="/taxi/${c.dispositivo}">${esc(c.nombre || c.dispositivo)}</a></td>` : '') +
+    `<td class="c-dur">${dur(c.duracion)}${c.revisar ? ' <span class="aviso-txt">(por revisar)</span>' : c.valida ? '' : ' <span class="m">(descartada: menos de 30 s)</span>'}</td>` +
+    `<td class="c-pax">${pax}</td><td class="c-fotos">${fotos}</td></tr>`;
 }

@@ -119,6 +119,8 @@ input:focus, select:focus { outline: none; border-color: var(--acc); }
 .taxi { display: grid; gap: 8px; transition: transform .12s; }
 .taxi:hover { transform: translateY(-2px); color: inherit; }
 .taxi img { width: 100%; aspect-ratio: 16/10; object-fit: cover; border-radius: 16px; background: #000; }
+.taxi .sin-foto { aspect-ratio: 16/10; border-radius: 16px; background: var(--card-2); color: var(--muted);
+  display: grid; place-items: center; font-size: 13px; }
 .taxi .k { grid-template-columns: repeat(3, 1fr); }
 .taxi .k b { font-size: 18px; }
 
@@ -169,6 +171,9 @@ canvas { display: block; border-radius: 16px; background: #000; cursor: crosshai
 .capa[hidden] { display: none; }
 .hoja { max-width: 1040px; margin: 0 auto; background: var(--bg); border-radius: 28px; padding: 18px 20px; display: grid; gap: 12px; }
 .hoja h2 { margin: 0; font-size: 17px; }
+.hoja > .fila:first-child { flex-wrap: nowrap; }
+.hoja > .fila:first-child h2 { flex: 1; min-width: 0; }
+.hoja > .fila:first-child button { flex: none; }
 .grafico { width: 100%; height: 130px; background: var(--card); border-radius: 16px; cursor: pointer; }
 .grafico .zona { fill: var(--ok); fill-opacity: .1; }
 .grafico .serie { fill: none; stroke: var(--ok); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
@@ -182,8 +187,11 @@ canvas { display: block; border-radius: 16px; background: #000; cursor: crosshai
 /* Visor de fotos */
 .visor { display: flex; align-items: center; justify-content: center; gap: 10px; background: rgba(0,0,0,.92); z-index: 20; }
 .visor[hidden] { display: none; }
-.visor figure { margin: 0; max-width: min(1000px, 100%); text-align: center; }
-.visor img { max-width: 100%; max-height: 78vh; border-radius: 16px; }
+.visor figure { margin: 0; flex: 1 1 auto; min-width: 0; max-width: 1100px; text-align: center; }
+/* Las fotos son chicas (320×240): se agrandan hasta llenar la pantalla, sin deformarse.
+   El borde suave deja ver el contorno de las fotos oscuras (de noche). */
+.visor img { width: min(1100px, 100%, calc(80vh * 4 / 3)); height: auto; max-height: 80vh; object-fit: contain; border-radius: 16px;
+  background: #000; outline: 1px solid rgba(255,255,255,.14); image-rendering: auto; }
 .visor figcaption { margin-top: 10px; color: #f4f4f6; }
 .visor figcaption a { color: #6aa8ff; }
 .visor .flecha { font-size: 26px; width: 48px; height: 48px; padding: 0; background: rgba(255,255,255,.12); color: #fff; }
@@ -291,4 +299,44 @@ img.rota { background: var(--card-2) !important; animation: none !important; }
   .visor .flecha { position: absolute; bottom: 24px; }
   .visor .izq { left: 24px; }
   .visor .der { right: 24px; }
+  .visor { padding: 64px 10px 96px; }
+  .visor figcaption { font-size: 13px; padding: 0 6px; }
+
+  /* Detalle de una carrera: pantalla completa, con el título y "Cerrar" siempre arriba. */
+  .capa { padding: 0; }
+  .hoja { border-radius: 0; min-height: 100%; padding: 0 14px 28px; gap: 10px; }
+  .hoja > .fila:first-child { position: sticky; top: 0; z-index: 3; margin: 0 -14px; padding: 12px 14px;
+    background: var(--bg); box-shadow: 0 1px 0 var(--line); }
+  .hoja h2 { font-size: 15px; }
+  .eventos { display: grid; }
+  .grafico { height: 110px; }
+
+  /* Filtros de Fotos: dos por fila en vez de uno debajo de otro. */
+  #tab-fotos .filtros { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  #tab-fotos .filtros select { width: 100%; margin: 0; min-width: 0; }
+  #diaFotos, #fCarrera, #fTipo { grid-column: 1 / -1; }
+
+  /* Registro: la fecha arriba y el texto en 2 renglones como mucho (al tocarla se abre completa). */
+  .registro .linea .m { display: block; margin-bottom: 1px; }
+  #rgLista > .linea:not(.abierta) .texto { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  #tab-registro .resumen { grid-template-columns: repeat(3, 1fr); }
+  #tab-registro .filtros { display: grid; grid-template-columns: auto 1fr; gap: 8px; }
+  #tab-registro .filtros input { max-width: none !important; width: 100%; }
+  #tab-registro .filtros a { grid-column: 1 / -1; }
+
+  /* Últimas carreras del inicio: cada fila como una tarjeta. */
+  .tabla-carreras tr.m { display: none; }
+  .tabla-carreras tr { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "ini pax" "dur taxi" "fotos fotos";
+    gap: 4px 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+  .tabla-carreras tr:nth-child(2) { border-top: 0; }
+  .tabla-carreras td { border: 0; padding: 0; }
+  .tabla-carreras .c-ini { grid-area: ini; font-weight: 600; }
+  .tabla-carreras .c-ini .m { font-weight: 400; }
+  .tabla-carreras .c-pax { grid-area: pax; text-align: right; }
+  .tabla-carreras .c-pax::after { content: " pax"; color: var(--muted); font-size: 12px; }
+  .tabla-carreras .c-dur { grid-area: dur; color: var(--muted); font-size: 13px; }
+  .tabla-carreras .c-taxi { grid-area: taxi; text-align: right; font-size: 13px; }
+  .tabla-carreras .c-fotos { grid-area: fotos; display: flex; gap: 4px; overflow-x: auto; }
+  .tabla-carreras .c-fotos img.mini { width: 72px; height: 54px; flex: none; }
+  .tabla-carreras tr.revisar { box-shadow: inset 3px 0 0 var(--warn); padding-left: 10px; }
 }

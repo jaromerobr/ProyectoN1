@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Taxiff · Panel</title>
-<link rel="stylesheet" href="/web/estilo.css">
+<link rel="stylesheet" href="/web/estilo.css?v=4">
 <link rel="icon" href="data:,">
 </head>
 <body>
@@ -17,7 +17,7 @@
   </section>
   <section>
     <div class="fila"><h2>Últimas carreras</h2><a class="m" id="csv" href="/api/panel/carreras.csv">Descargar todas para Excel (CSV)</a></div>
-    <div class="card"><table id="carreras"></table></div>
+    <div class="card"><table id="carreras" class="tabla-carreras"></table></div>
   </section>
   <section>
     <h2>Firmware de las cámaras</h2>
@@ -32,7 +32,7 @@
     </div>
   </section>
 </main>
-<script src="/web/comun.js"></script>
+<script src="/web/comun.js?v=4"></script>
 <script>
 async function cargar() {
   try {
@@ -43,7 +43,7 @@ async function cargar() {
     $('resumen').textContent = `${taxis.length} cámaras · ${enLinea} en línea · ${enCarrera} en carrera`;
     $('taxis').innerHTML = taxis.map(t => `
       <a class="card taxi" href="/taxi/${t.id}">
-        <img src="${t.ultima_foto ? '/fotos/' + t.ultima_foto : ''}" alt="">
+        ${t.ultima_foto ? `<img src="/fotos/${t.ultima_foto}" alt="">` : '<div class="sin-foto">Todavía sin fotos</div>'}
         <div class="fila"><b>${esc(t.nombre || t.id)}</b>${pill(t)}</div>
         <div class="m">${t.id}${t.aprobado ? '' : ' · <span class="mal">pendiente de aprobar</span>'}${t.por_revisar ? ` · <span class="aviso-txt">${t.por_revisar} carrera${t.por_revisar === 1 ? '' : 's'} por revisar</span>` : ''}</div>
         <div class="k">
