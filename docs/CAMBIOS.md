@@ -4,6 +4,35 @@ Lo más nuevo arriba. La seguridad y el cifrado se explican en detalle en [SEGUR
 
 ---
 
+## Firmware 4.2: subida estable con WiFi floja (cargado en la cámara y publicado)
+
+**El problema:** al subir muchas fotos guardadas, el panel mostraba de a ratos "Conectada, pero no está enviando fotos".
+- **Lo que pasaba:** los envíos se cortaban a mitad de camino (código -3). Cada lote podía pesar hasta 300 KB; con la señal de la casa (-60 a -68 dBm, ~33 KB/s) tardaba ~10 s y se cortaba.
+- **Por qué se repetía:** después de cada envío bueno el lote se duplicaba hasta volver a fallar. Tras cada corte, la cámara esperaba 15 s.
+
+**Cambios**
+- **Lotes de hasta 96 KB** (antes 300 KB). El tamaño se ajusta a lo que tardó el envío anterior, apuntando a unos 3 s por envío.
+- **Después de un corte, reintenta a los 3 s.** Solo tras más de 3 cortes seguidos espera 15 s.
+- **Panel:** mientras sube lo guardado, una pausa de hasta 3 min se muestra como **"Subiendo fotos guardadas · reintentando"**, no como error. El aviso de "no está enviando fotos" queda para pausas de más de 3 min.
+- **Registro:** una cola grande ya no cuenta como aviso, porque es normal al volver a tener internet. Solo cuenta si pasa de 6000 fotos.
+
+## Firmware 4.1: página de la cámara con el estilo del panel
+
+- **Mismo diseño que el panel**, en modo claro u oscuro.
+- **En el celular:** una columna, y las secciones plegables (servidor, ajustes, temperatura, carreras, fotos de entrenamiento, sistema).
+- **En la PC:** dos columnas.
+
+## Panel: diseño para celular y PC
+
+- **Visor:** la foto se agranda hasta llenar la pantalla, con un borde para que se vean las fotos de noche.
+- **Detalle de carrera:** en el celular ocupa toda la pantalla, con el título y "Cerrar" siempre arriba.
+- **Inicio:** "Últimas carreras" se muestra como tarjetas en el celular. Si un taxi no tiene fotos, dice "Todavía sin fotos" en vez de mostrar una imagen rota.
+- **Filtros de Fotos:** más compactos.
+- **Registro:** cada línea en 2 renglones y los contadores en una fila.
+- **Versión en los archivos del panel**, para que el celular no siga mostrando el diseño viejo guardado en su memoria.
+
+---
+
 ## Firmware 4.0 y servidor: carreras "por revisar" y fotos sin hora (probado y publicado)
 
 **Problema 1 — fotos mezcladas en la galería**

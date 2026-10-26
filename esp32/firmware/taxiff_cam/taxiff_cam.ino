@@ -210,7 +210,7 @@ void removeNetwork(const String &ssid) {
 // (TX-XXXXXX, de la MAC) y el token que el servidor le da al registrarse.
 // Sin internet, las fotos se guardan en /q y se suben después, las más viejas
 // primero.
-const char *FW_VERSION = "4.1";
+const char *FW_VERSION = "4.2";
 char devId[12];
 String srvUrl, devToken;
 char srvState[64] = "sin servidor configurado";
@@ -1514,10 +1514,12 @@ bool sendOldestQueued() {
 // Sube varias fotos de la cola en un solo envío (mucho más rápido que una por
 // una con días de fotos guardadas). Formato por foto: hora en ms (8 bytes),
 // conteo (4), largo (4) y el JPEG. false si no se pudo (sin internet).
-// Tamaño del lote: se adapta a la conexión. Si un envío se corta (WiFi débil,
-// hotspot lento) el siguiente es la mitad; si sale bien, vuelve a crecer.
-const size_t BATCH_MAX = 300 * 1024, BATCH_MIN = 16 * 1024;
-size_t batchBytes = 64 * 1024;
+// Tamaño del lote: se adapta a cuánto tarda cada envío. Con WiFi floja un lote
+// grande (300 KB a ~30 KB/s) tardaba ~10 s y la conexión se cortaba a mitad
+// (código -3) una y otra vez; ahora cada envío apunta a durar unos 3 s: crece de
+// a poco si fue rápido, se achica si fue lento y se parte a la mitad si se cortó.
+const size_t BATCH_MAX = 96 * 1024, BATCH_MIN = 16 * 1024;
+size_t batchBytes = 48 * 1024;
 
 bool sendBatch() {
   const size_t MAX_BYTES = batchBytes;
@@ -1547,11 +1549,17 @@ bool sendBatch() {
   }
   if (!k) { free(out); return true; }
   String body;
+  uint32_t t0 = millis();
   int code = srvPost("/api/v1/lote", "application/octet-stream", out, used, queueSize() - k, body);
+  uint32_t tardo = millis() - t0;
   free(out);
   if (code == 404) return sendOldestQueued();  // servidor viejo sin envío por lotes
-  if (code == 200) batchBytes = min(batchBytes * 2, BATCH_MAX);
-  else if (code < 0) batchBytes = max(batchBytes / 2, BATCH_MIN);  // se cortó: lotes más chicos
+  if (code == 200) {
+    if (tardo < 3000) batchBytes = min(batchBytes + 16 * 1024, BATCH_MAX);
+    else if (tardo > 6000) batchBytes = max(batchBytes * 3 / 4, BATCH_MIN);
+  } else if (code < 0) {
+    batchBytes = max(batchBytes / 2, BATCH_MIN);  // se cortó: lotes más chicos
+  }
   bool ok = handleReply(code, body, k);
   if (ok && code == 200) for (int i = 0; i < k; i++) queueDropHead();
   return ok && code == 200;
@@ -1878,13 +1886,20 @@ void uploadTask(void *) {
       lastLogs = millis();
       sendLogs();
     }
-    // Entre foto y foto se va vaciando la cola, de a varias por envío. Si el
-    // servidor no responde se reintenta en 15 s, sin frenar las fotos. Recién
-    // conectada se espera a tener la hora de internet (unos segundos, como
-    // mucho 2 min): con ella se calcula la de las fotos tomadas sin hora.
+    // Entre foto y foto se va vaciando la cola, de a varias por envío. Si un
+    // envío se corta se reintenta a los 3 s (lo normal con WiFi floja); recién
+    // tras varios cortes seguidos se espera 15 s. Recién conectada se espera a
+    // tener la hora de internet (unos segundos, como mucho 2 min): con ella se
+    // calcula la de las fotos tomadas sin hora.
+    static int cortesSeguidos = 0;
     bool clockReady = nowEpoch() || millis() > 120000;
-    if (canSend && clockReady && queueSize() > 0 && (int32_t)(millis() - retryAt) >= 0 && !sendBatch()) {
-      retryAt = millis() + 15000;
+    if (canSend && clockReady && queueSize() > 0 && (int32_t)(millis() - retryAt) >= 0) {
+      if (sendBatch()) {
+        cortesSeguidos = 0;
+      } else {
+        cortesSeguidos++;
+        retryAt = millis() + (cortesSeguidos <= 3 ? 3000 : 15000);
+      }
     }
   }
 }

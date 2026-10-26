@@ -383,6 +383,13 @@ def test_panel_muestra_si_llega_informacion(srv):
     c = estado()
     assert c["estado"] == "subiendo" and c["cola"] == 400 and c["cola_max"] == 1100 and "400" in c["titulo"]
     assert c["por_min"] >= 5
+    # Una pausa mientras sube lo guardado (envío cortado, la cámara reintenta) no es un error.
+    m = __import__("app")
+    m.db("UPDATE dispositivos SET visto = visto - 90 WHERE id = 'TX-000001'")
+    c = estado()
+    assert c["estado"] == "subiendo" and "reintentando" in c["titulo"]
+    m.db("UPDATE dispositivos SET visto = visto - 200 WHERE id = 'TX-000001'")
+    assert estado()["estado"] == "sin_fotos"
     cli.post("/api/v1/lote", headers={**h, "X-Cola": "0"}, content=lote_bytes([(t + 10, 0)]))
     assert estado()["estado"] == "recibiendo" and estado()["cola_max"] == 0
     enviar(cli, tok, 0)

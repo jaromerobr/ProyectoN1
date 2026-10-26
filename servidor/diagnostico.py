@@ -133,7 +133,9 @@ def estado(texto):
     filas = [
         ("WiFi", f"{g['wifi']} · {rssi} dBm ({_senal(rssi)})", rssi and rssi <= -75),
         ("Servidor", g["srv"], g["srv"] != "conectada"),
-        ("Fotos esperando subir", f"{cola}" + (" (todas subidas)" if not cola else ""), cola > 500),
+        # Muchas fotos en cola es normal al volver a tener internet; solo preocupa
+        # si es más de lo que la cámara graba en un día entero.
+        ("Fotos esperando subir", f"{cola}" + (" (todas subidas)" if not cola else ""), cola > 6000),
         ("Fotos por segundo", g["fps"], float(g["fps"]) < 0.5),
         ("Temperatura", f"{temp} °C" + (" (alta)" if temp >= 70 else ""), temp >= 70),
         ("Memoria RAM libre", f"{ram} KB" + (" (poca)" if ram < 60 else ""), ram < 60),

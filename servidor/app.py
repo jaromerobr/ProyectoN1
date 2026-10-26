@@ -689,10 +689,15 @@ def _conexion(d, ahora):
     cola, cola_max, por_min = d.get("cola") or 0, max(d.get("cola_max") or 0, d.get("cola") or 0), _por_minuto(d["id"])
     base = {"cola": cola, "cola_max": cola_max, "por_min": por_min,
             "foto_hace_s": None if foto is None else int(foto), "contacto_hace_s": None if contacto is None else int(contacto)}
+    # Subiendo lo guardado, con WiFi floja un envío a veces se corta y la cámara
+    # reintenta sola: una pausa de unos minutos es normal y no es un error.
+    if cola > 0 and foto is not None and foto < 180 and contacto is not None and contacto < 150:
+        pausa = foto >= 45
+        return {**base, "estado": "subiendo",
+                "titulo": f"Subiendo fotos guardadas · quedan {cola}" + (" · reintentando" if pausa else ""),
+                "detalle": (f"La conexión está lenta: el último envío se cortó hace {_hace(foto)} y la cámara reintenta sola."
+                            if pausa else f"Llegaron {por_min} en el último minuto. Son las que tomó sin internet.")}
     if foto is not None and foto < 45:
-        if cola > 0:
-            return {**base, "estado": "subiendo", "titulo": f"Subiendo fotos guardadas · quedan {cola}",
-                    "detalle": f"Llegaron {por_min} en el último minuto. Son las que tomó sin internet."}
         return {**base, "estado": "recibiendo", "titulo": "Recibiendo fotos",
                 "detalle": f"{por_min} en el último minuto · la última hace {_hace(foto)}"}
     if contacto is not None and contacto < 150:
