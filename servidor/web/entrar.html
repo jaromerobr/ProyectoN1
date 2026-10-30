@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Taxiff · Entrar</title>
+<link rel="stylesheet" href="/web/estilo.css?v=13">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<main class="entrar">
+  <form class="card" id="form" autocomplete="on">
+    <div>
+      <h1>Taxiff</h1>
+      <p class="m">Carreras y pasajeros de tu taxi.</p>
+    </div>
+    <label class="m">Usuario
+      <input id="usuario" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+    <label class="m">Clave
+      <input id="clave" name="password" type="password" autocomplete="current-password" required></label>
+    <label class="check m"><input type="checkbox" id="ver"> Mostrar clave</label>
+    <p class="error-txt" id="error" role="alert"></p>
+    <button id="boton">Entrar</button>
+    <p class="m">¿Olvidaste tu clave? Pídele una nueva a Taxiff.</p>
+  </form>
+</main>
+<script src="/web/comun.js?v=13"></script>
+<script>
+$('usuario').focus();
+$('ver').onchange = () => $('clave').type = $('ver').checked ? 'text' : 'password';
+$('form').onsubmit = async e => {
+  e.preventDefault();
+  $('boton').disabled = true;
+  $('boton').textContent = 'Entrando…';
+  $('error').textContent = '';
+  try {
+    const r = await fetch('/api/entrar', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ usuario: $('usuario').value, clave: $('clave').value }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'No se pudo entrar');
+    // Solo se vuelve a una página de este sitio.
+    const volver = new URLSearchParams(location.search).get('volver') || '';
+    location.href = /^\/(?!\/)/.test(volver) ? volver : d.ir;
+  } catch (err) {
+    $('error').textContent = err.message === 'Failed to fetch' ? 'Sin conexión con el servidor' : err.message;
+    $('boton').disabled = false;
+    $('boton').textContent = 'Entrar';
+  }
+};
+</script>
+</body>
+</html>

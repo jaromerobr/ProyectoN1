@@ -21,7 +21,9 @@ Arrancar:
 .\iniciar_pc.ps1 -Tunel -Esp 192.168.1.61   # y además configura esa cámara para usarla
 ```
 
-- **Panel:** `http://localhost:8000`. Usuario cualquiera (por ejemplo `admin`); la clave es `TAXIFF_CLAVE_PANEL`, por defecto `taxiff`.
+- **Panel:** `http://localhost:8000`. Pide entrar en `/entrar`, con el usuario `admin` y la clave `TAXIFF_CLAVE_PANEL` (por defecto `taxiff`).
+- **Dueños:** el admin les crea cuentas en el panel (sección "Dueños") y les asigna sus taxis. Cada dueño entra con su usuario y ve `/dueno`: sus carreras, con el cobro y los km estimados, y su odómetro. No ve fotos ni la cámara.
+- **Scripts:** HTTP Basic con la clave del panel sigue funcionando (`admin:<clave>`).
 - **Dirección del túnel gratuito:** cambia cada vez que se arranca. Para algo fijo, usa un servidor en la nube (abajo).
 
 Pruebas automáticas (no necesitan cámara ni modelo):
@@ -76,6 +78,7 @@ Después:
 | POST | `/api/v1/registro` | `{"id": "TX-…", "fw": "1.9"}` → `{"token": …}`. Una vez por cámara. Para registrarla de nuevo, se permite en el panel. |
 | POST | `/api/v1/foto` | JPEG en el cuerpo. Cabeceras: `X-Dispositivo`, `Authorization: Bearer <token>`, `X-Ts` (hora de la foto), `X-Conteo` (lo que vio la cámara), `X-Temp`, `X-Rssi`, `X-Fw`. Responde `modo`, `intervalo_ms`, `pasajeros`, `estado` y `firmware` (la versión más nueva). |
 | GET | `/api/v1/firmware?id=&token=&actual=` | Dice si hay firmware nuevo y dónde bajarlo. |
+| POST | `/api/v1/posiciones` | Para cuando haya GPS (hoy nadie lo usa): `[[ts, lat, lon], …]` con las cabeceras `X-Dispositivo` y `Authorization` de siempre. Con posiciones, los km y el mapa de cada carrera salen del recorrido real. |
 | GET | `/api/salud` | Para el monitoreo. |
 
 **Lógica de carrera:**

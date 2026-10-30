@@ -1,0 +1,1023 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Taxiff · Mi taxi</title>
+<link rel="stylesheet" href="/web/estilo.css?v=13">
+<link rel="icon" href="data:,">
+</head>
+<body class="pagina-dueno">
+<header>
+  <h1>Taxiff</h1>
+  <select id="taxi" title="Taxi" hidden></select>
+  <b id="nombreTaxi"></b>
+  <span class="espacio"></span>
+  <span class="m" id="quien"></span>
+  <a class="m" href="/salir">Salir</a>
+</header>
+<div id="vistaAdmin" class="envoltura-conexion" hidden></div>
+<div id="camara" class="envoltura-conexion"></div>
+
+<!-- En el celular es la barra de abajo: ícono y nombre, cada sección con su color, la elegida rellena. -->
+<nav class="pestanas con-iconos" aria-label="Secciones">
+  <button data-tab="resumen" class="activa"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7"/><path d="M5.5 9.5V20h13V9.5"/><path d="M10 20v-5h4v5"/></svg>Inicio</button>
+  <button data-tab="carreras"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-10.5a6.5 6.5 0 0 1 13 0C18.5 15.4 12 21 12 21z"/><circle cx="12" cy="10.5" r="2.3"/></svg>Carreras</button>
+  <button data-tab="dinero"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10.5h18"/><circle cx="16.5" cy="14.8" r="1.3"/></svg>Dinero</button>
+  <button data-tab="km"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 16.5V12l2.2-5h10.6l2.2 5v4.5z"/><path d="M4.5 12h15"/><circle cx="8" cy="16.5" r="1.8"/><circle cx="16" cy="16.5" r="1.8"/></svg>Taxi</button>
+  <button data-tab="tarifa"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg>Ajustes</button>
+</nav>
+
+<main id="contenido">
+  <!-- ======================= RESUMEN ======================= -->
+  <section id="tab-resumen" class="tab">
+    <div id="ahora" class="card en-carrera" hidden></div>
+    <div id="avisos" class="avisos"></div>
+    <div class="segmentos" role="tablist">
+      <button data-p="hoy" class="activa">Hoy</button>
+      <button data-p="semana">Esta semana</button>
+      <button data-p="mes">Este mes</button>
+      <button data-p="total">Desde el inicio</button>
+    </div>
+    <div class="card k resumen">
+      <div><b id="pCarreras">–</b><span>carreras</span></div>
+      <div><b id="pCobro" class="dinero">–</b><span>≈ cobrado</span></div>
+      <div><b id="pKm">–</b><span>≈ km con pasajeros</span></div>
+      <div><b id="pTiempo">–</b><span>con pasajeros</span></div>
+      <div><b id="pPax">–</b><span>pasajeros</span></div>
+    </div>
+    <div class="fila nota-compartir"><p class="m" id="pNota"></p>
+      <button class="fantasma" id="compartir">Compartir por WhatsApp</button></div>
+    <div class="card" id="porChofer" hidden>
+      <b>Por chofer</b>
+      <table class="tabla-dias" id="tablaChofer"></table>
+    </div>
+    <div class="card">
+      <div class="fila"><b>Últimos 7 días</b><span class="m">toca un día para ver sus carreras</span></div>
+      <table id="dias" class="tabla-dias"></table>
+    </div>
+    <div class="card">
+      <div class="fila"><b>Cuándo trabaja más</b>
+        <div class="fila"><select id="hTurno" title="Chofer" hidden></select>
+          <div class="segmentos chico" id="hModo"><button data-m="hora" class="activa">Por hora</button><button data-m="dia">Por día</button></div></div></div>
+      <p class="m" id="hSub"></p>
+      <div class="barras" id="hBarras" role="group" aria-label="Carreras por hora"></div>
+      <div class="ejes" id="hEjes" aria-hidden="true"></div>
+      <p class="detalle-barra" id="hDetalle" aria-live="polite"></p>
+    </div>
+    <div class="card" id="kmMini"></div>
+  </section>
+
+  <!-- ======================= CARRERAS ======================= -->
+  <section id="tab-carreras" class="tab" hidden>
+    <h2 class="titulo-tab">Carreras</h2>
+    <label class="elegir-dia">Día<select id="dia" title="Día"></select></label>
+    <div class="card k resumen">
+      <div><b id="cCarreras">–</b><span>carreras</span></div>
+      <div><b id="cCobro" class="dinero">–</b><span>≈ cobrado</span></div>
+      <div><b id="cKm">–</b><span>≈ km con pasajeros</span></div>
+      <div><b id="cTiempo">–</b><span>con pasajeros</span></div>
+    </div>
+    <p class="m" id="cAviso"></p>
+    <details class="card plegable" id="liqCaja">
+      <summary><div><b>Liquidación del día</b><div class="m" id="liqResumen"></div></div><span class="abrir">Anotar ›</span></summary>
+      <p class="m">Lo que el chofer te entregó (su cuenta) y, si lo sabes, lo que cobró en total.</p>
+      <div id="liquidaciones" class="liquidaciones"></div>
+    </details>
+    <p class="pista">👆 Toca una carrera para ver <b>su recorrido en el mapa</b>, quién subió y cómo se calculó el cobro.</p>
+    <div id="lista" class="lista-carreras"></div>
+    <a class="boton-sec" id="csv">📊 Descargar las carreras del mes (Excel)</a>
+  </section>
+
+  <!-- ======================= DINERO ======================= -->
+  <section id="tab-dinero" class="tab" hidden>
+    <h2 class="titulo-tab">Dinero</h2>
+    <div class="fila barra">
+      <input type="month" id="mesDinero" title="Mes" class="mes">
+      <a class="boton-sec" id="informe">📄 Informe del mes (Word)</a>
+    </div>
+    <div class="card k resumen">
+      <div><b id="dIngresos" class="dinero">–</b><span>entregaron los choferes</span></div>
+      <div><b id="dGastos">–</b><span>gastos</span></div>
+      <div><b id="dQueda">–</b><span>queda</span></div>
+      <div><b id="dCostoKm">–</b><span>gasto por km</span></div>
+    </div>
+    <p class="m" id="dNota"></p>
+
+    <div class="card">
+      <b>Choferes</b>
+      <table id="tablaChoferes" class="tabla-dias"></table>
+      <p class="m">Debía = cuenta pactada × jornadas trabajadas. La cuenta se pone en <b>Ajustes → Turnos</b>; lo entregado, en la liquidación de cada día (Carreras).</p>
+    </div>
+
+    <div class="card">
+      <b>Gastos del mes</b>
+      <p class="m">Toca qué pagaste y anota cuánto. Si fue un cambio de aceite u otro mantenimiento, también queda marcado como hecho.</p>
+      <div class="rapidos" id="gRapidos">
+        <button class="fantasma" data-c="Combustible">⛽ Gasolina</button>
+        <button class="fantasma" data-c="Cambio de aceite">🛢️ Aceite</button>
+        <button class="fantasma" data-c="Repuestos">🔧 Repuesto</button>
+        <button class="fantasma" data-c="Reparación mecánica">🧰 Arreglo</button>
+        <button class="fantasma" data-c="Llantas">🛞 Llantas</button>
+        <button class="fantasma" data-c="Lavado">🧽 Lavado</button>
+        <button class="fantasma" data-c="Cooperativa">🏢 Cooperativa</button>
+        <button class="fantasma" data-c="Otros">➕ Otro</button>
+      </div>
+      <form id="gForm" class="gasto-form" hidden>
+        <div class="formulario">
+          <label>Qué<select id="gCategoria"></select></label>
+          <label>Cuánto ($)<input id="gMonto" type="number" step="0.01" min="0" inputmode="decimal" required></label>
+          <label>Fecha<input id="gFecha" type="date"></label>
+          <label>Detalle (opcional)<input id="gDesc" maxlength="120" placeholder="Ej. tanque lleno"></label>
+          <label>Dónde (opcional)<input id="gLugar" maxlength="80" placeholder="Ej. gasolinera de la Av. Universitaria"></label>
+          <label>Cómo pagó<select id="gPago"><option value="">–</option></select></label>
+          <label>Odómetro (opcional)<input id="gKm" type="number" inputmode="numeric" min="0"></label>
+          <label id="gMantL">¿Deja hecho un mantenimiento?<select id="gMant"><option value="">No</option></select></label>
+        </div>
+        <div class="fila botones"><button id="gGuardar">Guardar gasto</button><button type="button" class="fantasma" id="gCancelar">Cancelar</button></div>
+        <p class="error-txt" id="gError" role="alert"></p>
+      </form>
+      <div id="gGrupos"></div>
+      <div id="gLista" class="lecturas"></div>
+    </div>
+
+    <div class="card">
+      <b>Pagos que vencen</b>
+      <p class="m">Cooperativa, seguro, matrícula, revisión… Taxiff te avisa 5 días antes. Al marcarlo pagado queda como gasto del día.</p>
+      <div id="pLista" class="lecturas"></div>
+      <details id="pNuevo">
+        <summary><b>+ Agregar un pago</b></summary>
+        <div class="fila botones" id="pSugeridos">
+          <button class="fantasma" data-n="Cuota de la cooperativa" data-c="Cooperativa" data-f="mensual">Cooperativa (cada mes)</button>
+          <button class="fantasma" data-n="Seguro" data-c="Seguro" data-f="mensual">Seguro (cada mes)</button>
+          <button class="fantasma" data-n="Seguro contra terceros" data-c="Seguro" data-f="anual">Seguro contra terceros (cada año)</button>
+          <button class="fantasma" data-n="Matrícula" data-c="Matrícula / revisión" data-f="anual">Matrícula (cada año)</button>
+          <button class="fantasma" data-n="Revisión técnica" data-c="Matrícula / revisión" data-f="anual">Revisión técnica (cada año)</button>
+          <button class="fantasma" data-n="Permiso de operación" data-c="Impuestos / tasas" data-f="anual">Permiso de operación (cada año)</button>
+        </div>
+        <div class="formulario">
+          <label>Qué hay que pagar<input id="pNombre" maxlength="60"></label>
+          <label>Categoría<select id="pCategoria"></select></label>
+          <label>Cuánto ($, opcional)<input id="pMonto" type="number" step="0.01" min="0" inputmode="decimal"></label>
+          <label>Se repite<select id="pFrec"><option value="mensual">Cada mes</option><option value="anual">Cada año</option><option value="una_vez">Una sola vez</option></select></label>
+          <label>Próximo vencimiento<input id="pProxima" type="date"></label>
+        </div>
+        <div class="fila botones"><button id="pGuardar">Agregar</button></div>
+        <p class="error-txt" id="pError" role="alert"></p>
+      </details>
+    </div>
+  </section>
+
+  <!-- ======================= TAXI (kilometraje y mantenimiento) ======================= -->
+  <section id="tab-km" class="tab" hidden>
+    <h2 class="titulo-tab">Tu taxi</h2>
+    <div class="card" id="odo"></div>
+    <div class="card">
+      <b>Anotar lo que marca el odómetro</b>
+      <p class="m">Una vez por semana basta (por ejemplo cada lunes).</p>
+      <div class="formulario">
+        <label>Kilómetros<input id="oKm" type="number" inputmode="numeric" min="0" step="1" placeholder="Ej. 123456"></label>
+      </div>
+      <details class="mas-opciones">
+        <summary>Otra fecha o una nota</summary>
+        <div class="formulario">
+          <label>Fecha y hora<input id="oFecha" type="datetime-local"></label>
+          <label>Nota (opcional)<input id="oNota" maxlength="120" placeholder="Ej. cambio de aceite"></label>
+        </div>
+      </details>
+      <div class="fila botones"><button id="oGuardar">Guardar lectura</button></div>
+      <p class="error-txt" id="oError" role="alert"></p>
+    </div>
+    <div class="card">
+      <b>Mantenimiento</b>
+      <p class="m">Taxiff te avisa cuando se acerque, según el kilometraje estimado.</p>
+      <div id="mLista" class="lecturas"></div>
+      <details id="mNuevo">
+        <summary><b>+ Agregar</b></summary>
+        <div class="fila botones" id="mSugeridos">
+          <button class="fantasma" data-n="Cambio de aceite" data-c="5000">Aceite · 5.000 km</button>
+          <button class="fantasma" data-n="Filtro de aire" data-c="10000">Filtro de aire · 10.000 km</button>
+          <button class="fantasma" data-n="Rotación de llantas" data-c="10000">Llantas · 10.000 km</button>
+          <button class="fantasma" data-n="Pastillas de freno" data-c="20000">Frenos · 20.000 km</button>
+        </div>
+        <div class="formulario">
+          <label>Qué<input id="mNombre" maxlength="40" placeholder="Ej. cambio de aceite"></label>
+          <label>Cada cuántos km<input id="mCada" type="number" inputmode="numeric" min="100" step="100"></label>
+          <label>La última vez fue a los (km)<input id="mUltimo" type="number" inputmode="numeric" min="0" placeholder="Vacío = hoy"></label>
+        </div>
+        <div class="fila botones"><button id="mGuardar">Agregar</button></div>
+        <p class="error-txt" id="mError" role="alert"></p>
+      </details>
+    </div>
+    <div class="card" id="cardTramos" hidden>
+      <b>Km vacíos entre lecturas</b>
+      <p class="m">Km del odómetro sin pasajeros. Si son muchos: uso personal, cámara tapada o mucho tiempo buscando clientes.</p>
+      <div id="tramos" class="lecturas"></div>
+    </div>
+    <div class="card">
+      <b>Lecturas anotadas</b>
+      <div id="lecturas" class="lecturas"></div>
+    </div>
+  </section>
+
+  <!-- ======================= TARIFA ======================= -->
+  <section id="tab-tarifa" class="tab" hidden>
+    <h2 class="titulo-tab">Ajustes</h2>
+    <div class="card">
+      <b>Turnos y choferes</b>
+      <p class="m">Con chofer de día y de noche, Taxiff separa las carreras y la plata de cada uno. Un turno de noche (por ejemplo de 18 a 6) cuenta para el día en que empezó.</p>
+      <div id="turnos" class="lecturas"></div>
+      <details id="tuNuevo">
+        <summary><b>+ Agregar chofer</b></summary>
+        <div class="formulario dos-col">
+          <label class="ancho">Nombre del chofer<input id="tuNombre" maxlength="40" placeholder="Ej. Juan"></label>
+          <label>Desde (hora)<input id="tuDesde" type="number" min="0" max="23" inputmode="numeric" placeholder="6"></label>
+          <label>Hasta (hora)<input id="tuHasta" type="number" min="0" max="23" inputmode="numeric" placeholder="18"></label>
+          <label class="ancho">Cuenta por jornada ($)<input id="tuCuenta" type="number" step="0.01" min="0" inputmode="decimal" placeholder="Ej. 30"></label>
+        </div>
+        <div class="fila botones"><button id="tuGuardar">Agregar chofer</button></div>
+        <p class="error-txt" id="tuError" role="alert"></p>
+      </details>
+      <div id="sinTurnos" class="ejemplo">
+        <label class="m">Sin turnos: cuenta diaria que entrega el chofer ($)
+          <input id="cuentaDiaria" type="number" step="0.01" min="0" inputmode="decimal" placeholder="Ej. 30"></label>
+        <div class="fila botones"><button class="fantasma" id="cuentaGuardar">Guardar cuenta</button></div>
+      </div>
+    </div>
+    <div class="card">
+      <b>Tu tarifa</b>
+      <p class="m">Con esto se estima cuánto se cobró en cada carrera. Pon los valores de tu taxímetro.</p>
+      <p class="sub">☀️ De día</p>
+      <div class="formulario dos-col">
+        <label>Arranque ($)<input data-k="arranque" type="number" step="0.01" min="0" inputmode="decimal"></label>
+        <label>Por kilómetro ($)<input data-k="km" type="number" step="0.01" min="0" inputmode="decimal"></label>
+        <label>Carrera mínima ($)<input data-k="minima" type="number" step="0.01" min="0" inputmode="decimal"></label>
+      </div>
+      <p class="sub">🌙 De noche</p>
+      <div class="formulario dos-col">
+        <label>Arranque ($)<input data-k="arranque_noche" type="number" step="0.01" min="0" inputmode="decimal"></label>
+        <label>Por kilómetro ($)<input data-k="km_noche" type="number" step="0.01" min="0" inputmode="decimal"></label>
+        <label>Carrera mínima ($)<input data-k="minima_noche" type="number" step="0.01" min="0" inputmode="decimal"></label>
+        <label>Empieza a las (hora)<input data-k="noche_desde" type="number" step="1" min="0" max="23" inputmode="numeric"></label>
+        <label>Termina a las (hora)<input data-k="noche_hasta" type="number" step="1" min="0" max="23" inputmode="numeric"></label>
+      </div>
+      <p class="sub">🚦 Velocidad en la ciudad</p>
+      <div class="formulario">
+        <label>Velocidad promedio en carrera (km/h)<input data-k="vel_kmh" type="number" step="1" min="5" max="80" inputmode="numeric"></label>
+      </div>
+      <p class="m">Sin GPS, los km de cada carrera salen de su duración × esta velocidad. En Loja, unos 15–20 km/h.</p>
+      <p class="ejemplo" id="tEjemplo"></p>
+      <div class="fila botones"><button id="tGuardar">Guardar tarifa</button>
+        <button class="fantasma" id="tRestablecer">Volver a la de referencia</button></div>
+      <p class="error-txt" id="tError" role="alert"></p>
+    </div>
+    <div class="card">
+      <b>Calibración con el taxímetro</b>
+      <p class="m">Ajusta los estimados con lo que marcó el taxímetro. Solo cuentan las liquidaciones marcadas como
+        <b>"lectura del taxímetro"</b>; lo que dice el chofer no cambia nada.</p>
+      <p id="aMedido"></p>
+      <label class="interruptor"><input type="checkbox" id="aAjustar">
+        <span>Calibrar los estimados con las lecturas del taxímetro</span></label>
+      <p id="aChofer" class="m"></p>
+    </div>
+  </section>
+</main>
+
+<!-- Pedido del odómetro: sin lectura o con la última de hace más de 7 días -->
+<div id="pedirOdo" class="capa" hidden>
+  <div class="hoja dialogo" role="dialog" aria-labelledby="poTitulo">
+    <h2 id="poTitulo">Anota el kilometraje</h2>
+    <p id="poTexto" class="m"></p>
+    <label class="m">Lo que marca el odómetro ahora (km)
+      <input id="poKm" type="number" inputmode="numeric" min="0" step="1" placeholder="Ej. 123456"></label>
+    <p class="error-txt" id="poError" role="alert"></p>
+    <div class="fila botones"><button id="poGuardar">Guardar</button><button class="fantasma" id="poLuego">Recordarme mañana</button></div>
+  </div>
+</div>
+
+<!-- Detalle de una carrera -->
+<div id="detalle" class="capa" hidden>
+  <div class="hoja">
+    <div class="fila"><h2 id="dTitulo"></h2><button class="fantasma" id="dCerrar">Cerrar ✕</button></div>
+    <div class="mapa" id="dMapa"></div>
+    <div class="k">
+      <div><b id="dDuracion"></b><span>duración</span></div>
+      <div><b id="dPax"></b><span>pasajeros</span></div>
+      <div><b id="dKm"></b><span>≈ km</span></div>
+      <div><b id="dCobro" class="dinero"></b><span>≈ cobrado</span></div>
+    </div>
+    <p class="m" id="dCalculo"></p>
+    <b>Quién subió y bajó</b>
+    <div id="dEventos" class="eventos"></div>
+  </div>
+</div>
+
+<script src="/web/comun.js?v=13"></script>
+<script>
+const como = new URLSearchParams(location.search).get('como');
+const horaCorta = ts => new Date(ts * 1000).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+const fechaCorta = ts => new Date(ts * 1000).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+const fechaLarga = d => new Date(d + 'T12:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+const diaCorto = d => new Date(d + 'T12:00').toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' });
+let yo = null, taxi = null, resumen = null, periodo = 'hoy', tarifa = null;
+const base = () => `/api/dueno/taxi/${taxi}`;
+
+// ---------------------------------------------------------------- pestañas
+let pestana = 'resumen';
+function abrirPestana(t) {
+  pestana = t;
+  document.querySelectorAll('.pestanas button').forEach(x => x.classList.toggle('activa', x.dataset.tab === t));
+  document.querySelectorAll('.tab').forEach(s => s.hidden = s.id !== 'tab-' + t);
+  $('camara').hidden = t !== 'resumen';  // el estado de la cámara, solo en Inicio
+  window.scrollTo({ top: 0 });
+  if (t === 'dinero' && taxi) cargarDinero();
+}
+document.querySelectorAll('.pestanas button').forEach(b => b.onclick = () => abrirPestana(b.dataset.tab));
+
+// ---------------------------------------------------------------- inicio
+async function iniciar() {
+  try {
+    yo = await api('/api/dueno/yo' + (como ? '?como=' + encodeURIComponent(como) : ''));
+  } catch (e) { $('contenido').innerHTML = `<p class="m">${esc(e.message)}</p>`; return; }
+  $('quien').textContent = yo.rol === 'admin' ? 'Administrador' : yo.nombre;
+  if (yo.rol === 'admin') {
+    $('vistaAdmin').hidden = false;
+    $('vistaAdmin').innerHTML = `<div class="conexion corto"><span class="punto"></span><div>` +
+      (yo.viendo_como ? `Así ve su página <b>${esc(yo.nombre)}</b> (dueño).` : 'Vista de dueño con todos los taxis.') +
+      ` <a href="/" class="enlace">Volver al panel</a></div></div>`;
+  }
+  if (!yo.taxis.length) {
+    $('contenido').innerHTML = `<div class="card"><b>Todavía no tienes taxis asignados.</b>
+      <p class="m">Pídele a Taxiff que asigne tu taxi a tu cuenta. Cuando lo haga, aquí verás sus carreras.</p></div>`;
+    document.querySelector('.pestanas').hidden = true;
+    return;
+  }
+  let guardado = null;
+  try { guardado = localStorage.getItem('taxiff_mi_taxi'); } catch (e) {}
+  const sel = $('taxi');
+  sel.innerHTML = yo.taxis.map(t => `<option value="${esc(t.id)}">${esc(t.nombre)}</option>`).join('');
+  if (yo.taxis.some(t => t.id === guardado)) sel.value = guardado;
+  sel.hidden = yo.taxis.length < 2;
+  sel.onchange = () => { try { localStorage.setItem('taxiff_mi_taxi', sel.value); } catch (e) {} elegirTaxi(sel.value); };
+  elegirTaxi(sel.value);
+}
+
+async function elegirTaxi(id) {
+  taxi = id;
+  const t = yo.taxis.find(x => x.id === id);
+  $('nombreTaxi').textContent = yo.taxis.length < 2 ? t.nombre : '';
+  document.title = 'Taxiff · ' + t.nombre;
+  $('lista').innerHTML = cargando('Buscando las carreras…');
+  await cargarResumen();
+  pintarTarifa(resumen.taxi.tarifa);
+  pintarOdometro(resumen.odometro);
+  pedirOdometro(resumen.odometro);
+  const dias = await api(base() + '/dias');
+  $('dia').innerHTML = dias.map(d => `<option value="${d}">${fechaLarga(d)}</option>`).join('');
+  cargarCarreras();
+  cargarHoras();
+}
+
+// ---------------------------------------------------------------- resumen
+async function cargarResumen() {
+  resumen = await api(base() + '/resumen');
+  const t = resumen.taxi, c = t.camara;
+  $('camara').innerHTML = `<div class="conexion corto ${c.estado}" role="status"><span class="punto"></span>` +
+    `<div><b>${esc(c.titulo)}</b><div class="m">${esc(c.detalle)}</div></div></div>`;
+  $('ahora').hidden = !t.en_carrera;
+  if (t.en_carrera) $('ahora').innerHTML = `<span class="punto"></span><div><b>En carrera ahora</b>` +
+    `<div class="m">${durLarga(t.carrera_s)} · ${t.pasajeros_ahora} pasajero${t.pasajeros_ahora === 1 ? '' : 's'} a bordo</div></div>`;
+  pintarPeriodo();
+  pintarAvisos();
+  const max = Math.max(1, ...resumen.dias.map(d => d.cobro));
+  $('dias').innerHTML = '<tr class="m"><td>Día</td><td>Carreras</td><td>≈ Cobrado</td><td>≈ Km</td></tr>' +
+    resumen.dias.map(d => `<tr data-dia="${d.dia}" tabindex="0"><td>${diaCorto(d.dia)}` +
+      `<div class="barrita"><span style="width:${Math.round(100 * d.cobro / max)}%"></span></div></td>` +
+      `<td>${d.carreras}</td><td class="dinero">${d.carreras ? plata(d.cobro) : '–'}` +
+      (d.reportado !== null ? `<div class="m${d.cobro >= 3 && d.reportado < d.cobro * 0.8 ? ' aviso-txt' : ''}">cobró ${plata(d.reportado)}</div>` : '') +
+      (d.entregado !== null ? `<div class="m">entregó ${plata(d.entregado)}</div>` : '') +
+      `</td><td>${d.carreras ? kms(d.km) : '–'}<span class="flecha-fila" aria-hidden="true">›</span></td></tr>`).join('');
+  $('dias').querySelectorAll('tr[data-dia]').forEach(tr => tr.onclick = tr.onkeydown = e => {
+    if (e.type === 'keydown' && e.key !== 'Enter') return;
+    irADia(tr.dataset.dia);
+  });
+  pintarMantenimiento(resumen.mantenimiento);
+  pintarAjuste(resumen.ajuste);
+  pintarTurnos(resumen.turnos);
+  const o = resumen.odometro;
+  $('kmMini').innerHTML = o.estimado === null
+    ? `<b>Kilometraje</b><p class="m">Anota lo que marca el odómetro hoy y Taxiff llevará la cuenta de los km de tu taxi.</p>
+       <button class="fantasma" onclick="abrirPestana('km')">Anotar kilometraje</button>`
+    : `<div class="fila"><div><span class="m">Kilometraje estimado hoy</span><div class="cifra-grande">≈ ${kmEnteros(o.estimado)}</div></div>
+       <button class="fantasma" onclick="abrirPestana('km')">Ver detalle</button></div>`;
+}
+
+// Avisos: tocar uno lleva a donde se resuelve. Se ven los 2 más urgentes; el resto,
+// con "Ver N avisos más", para no tapar las cifras del día.
+let todosLosAvisos = false;
+const URGENCIA = { mal: 0, aviso: 1, info: 2 };
+function pintarAvisos() {
+  const lista = resumen.avisos.slice().sort((a, b) => (URGENCIA[a.nivel] ?? 1) - (URGENCIA[b.nivel] ?? 1));
+  const visibles = todosLosAvisos ? lista : lista.slice(0, 2);
+  $('avisos').innerHTML = visibles.map((a, i) =>
+    `<button class="aviso-dueno ${a.nivel}" data-i="${i}"><b>${esc(a.titulo)}</b><span class="m">${esc(a.texto)}</span></button>`).join('') +
+    (lista.length > visibles.length
+      ? `<button class="boton-sec" id="masAvisos">Ver ${lista.length - visibles.length} aviso${lista.length - visibles.length === 1 ? '' : 's'} más</button>` : '');
+  $('avisos').querySelectorAll('.aviso-dueno').forEach(b => b.onclick = () => {
+    const ir = lista[b.dataset.i].ir || '';
+    if (ir === 'km' || ir === 'dinero') abrirPestana(ir);
+    else if (ir.startsWith('carreras:')) irADia(ir.slice(9));
+  });
+  if ($('masAvisos')) $('masAvisos').onclick = () => { todosLosAvisos = true; pintarAvisos(); };
+}
+
+function pintarPeriodo() {
+  const p = resumen.periodos[periodo];
+  $('pCarreras').textContent = p.carreras;
+  $('pCobro').textContent = plata(p.cobro);
+  $('pKm').textContent = kms(p.km);
+  $('pTiempo').textContent = durLarga(p.tiempo_s);
+  $('pPax').textContent = p.pasajeros;
+  const desde = periodo === 'total' && resumen.desde ? `Desde el ${fechaCorta(resumen.desde)}. ` : '';
+  $('pNota').innerHTML = desde + '≈ = estimado. Sin GPS, los km salen del tiempo de cada carrera y el cobro, de tu tarifa.' +
+    (resumen.en_revision ? ` <b class="aviso-txt">${resumen.en_revision} carrera${resumen.en_revision === 1 ? '' : 's'} en revisión</b> (Taxiff confirma si fueron carreras y ahí se suman).` : '');
+  // Con turnos, el mismo período separado por chofer.
+  const grupos = resumen.por_turno?.[periodo];
+  $('porChofer').hidden = !grupos;
+  if (grupos) $('tablaChofer').innerHTML = '<tr class="m"><td>Chofer</td><td>Carreras</td><td>≈ Cobrado</td><td>≈ Km</td></tr>' +
+    grupos.map(g => `<tr><td>${esc(g.nombre)}${g.desde !== null ? `<div class="m">${g.desde}:00–${g.hasta}:00</div>` : ''}</td>` +
+      `<td>${g.carreras}</td><td class="dinero">${plata(g.cobro)}</td><td>${kms(g.km)}</td></tr>`).join('');
+}
+document.querySelectorAll('.segmentos button[data-p]').forEach(b => b.onclick = () => {
+  periodo = b.dataset.p;
+  document.querySelectorAll('.segmentos button[data-p]').forEach(x => x.classList.toggle('activa', x === b));
+  pintarPeriodo();
+});
+function irADia(dia) {
+  if (![...$('dia').options].some(o => o.value === dia))
+    $('dia').insertAdjacentHTML('beforeend', `<option value="${dia}">${fechaLarga(dia)}</option>`);
+  $('dia').value = dia;
+  cargarCarreras();
+  abrirPestana('carreras');
+}
+
+// Compartir el resumen del período elegido (WhatsApp u otra app del celular).
+const NOMBRE_PERIODO = { hoy: 'Hoy', semana: 'Esta semana', mes: 'Este mes', total: 'Desde el inicio' };
+$('compartir').onclick = async () => {
+  const p = resumen.periodos[periodo], t = yo.taxis.find(x => x.id === taxi);
+  const texto = `Taxiff · ${t.nombre}\n${NOMBRE_PERIODO[periodo]}: ${p.carreras} carrera${p.carreras === 1 ? '' : 's'}, ` +
+    `${p.pasajeros} pasajero${p.pasajeros === 1 ? '' : 's'}\n≈ ${plata(p.cobro)} cobrados · ≈ ${kms(p.km)} con pasajeros · ` +
+    `${durLarga(p.tiempo_s)} con pasajeros\n(≈ = estimado)`;
+  if (navigator.share) { try { await navigator.share({ text: texto }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  window.open('https://wa.me/?text=' + encodeURIComponent(texto), '_blank', 'noopener');
+};
+
+// ---------------------------------------------------------------- cuándo trabaja más
+// Una sola serie (carreras), barras de un solo color. Tocar o pasar por una barra
+// muestra su detalle debajo; sin tocar nada, se muestra la mejor.
+let horas = null, modoHoras = 'hora', barraElegida = null;
+const DIAS_SEMANA = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados', 'domingos'];
+async function cargarHoras() {
+  horas = await api(`${base()}/horas?dias=30&turno=${$('hTurno').value || 0}`);
+  barraElegida = null;
+  pintarHoras();
+}
+$('hTurno').onchange = cargarHoras;
+function pintarHoras() {
+  const porHora = modoHoras === 'hora';
+  const filas = porHora ? horas.por_hora : horas.por_dia;
+  const valor = f => porHora ? f.carreras : (f.veces ? f.carreras / f.veces : 0);
+  const max = Math.max(...filas.map(valor));
+  $('hSub').textContent = horas.carreras
+    ? (porHora ? `Carreras que empezaron en cada hora, en los últimos ${horas.dias} días.` : `Promedio de carreras por día, en los últimos ${horas.dias} días.`)
+    : `Todavía no hay carreras en los últimos ${horas.dias} días.`;
+  $('hBarras').setAttribute('aria-label', porHora ? 'Carreras por hora' : 'Carreras por día de la semana');
+  const mejor = filas.reduce((a, f, i) => valor(f) > valor(filas[a]) ? i : a, 0);
+  const elegida = barraElegida ?? mejor;
+  $('hBarras').innerHTML = filas.map((f, i) => {
+    const alto = max ? Math.round(100 * valor(f) / max) : 0;
+    return `<button data-i="${i}" class="${i === elegida ? 'activa' : ''}" aria-label="${etiquetaBarra(f, i)}">` +
+      `<span style="height:${alto}%${alto ? '' : ';visibility:hidden'}"></span></button>`;
+  }).join('');
+  $('hEjes').innerHTML = filas.map((f, i) => `<span>${porHora ? (i % 3 === 0 ? i : '') : DIAS_SEMANA[i].slice(0, 2)}</span>`).join('');
+  const mostrar = i => {
+    $('hBarras').querySelectorAll('button').forEach(b => b.classList.toggle('activa', +b.dataset.i === i));
+    $('hDetalle').innerHTML = horas.carreras ? etiquetaBarra(filas[i], i, true) : '';
+  };
+  $('hBarras').querySelectorAll('button').forEach(b => {
+    b.onclick = () => { barraElegida = +b.dataset.i; mostrar(barraElegida); };
+    b.onmouseenter = () => mostrar(+b.dataset.i);
+    b.onfocus = () => mostrar(+b.dataset.i);
+  });
+  $('hBarras').onmouseleave = () => mostrar(barraElegida ?? mejor);
+  mostrar(elegida);
+}
+function etiquetaBarra(f, i, html) {
+  const b = s => html ? `<b>${s}</b>` : s;
+  if (modoHoras === 'hora') {
+    const h = String(i).padStart(2, '0') + ':00–' + String((i + 1) % 24).padStart(2, '0') + ':00';
+    return `${b(h)} · ${f.carreras} carrera${f.carreras === 1 ? '' : 's'} · ≈ ${plata(f.cobro)} en ${horas.dias} días`;
+  }
+  const prom = f.veces ? f.carreras / f.veces : 0;
+  return `${b('Los ' + DIAS_SEMANA[i])} · ${prom.toLocaleString('es-EC', { maximumFractionDigits: 1 })} carreras y ≈ ${plata(f.veces ? f.cobro / f.veces : 0)} por día`;
+}
+$('hModo').querySelectorAll('button').forEach(b => b.onclick = () => {
+  modoHoras = b.dataset.m;
+  barraElegida = null;
+  $('hModo').querySelectorAll('button').forEach(x => x.classList.toggle('activa', x === b));
+  pintarHoras();
+});
+
+// ---------------------------------------------------------------- carreras del día
+let pedido = 0;
+async function cargarCarreras() {
+  const mio = ++pedido, dia = $('dia').value;
+  const r = await api(`${base()}/carreras?dia=${dia}`);
+  if (mio !== pedido) return;
+  $('cCarreras').textContent = r.resumen.carreras;
+  $('cCobro').textContent = plata(r.resumen.cobro);
+  $('cKm').textContent = kms(r.resumen.km);
+  $('cTiempo').textContent = durLarga(r.resumen.tiempo_s);
+  $('cAviso').innerHTML = [
+    r.atipicas ? `<b class="aviso-txt">${r.atipicas} carrera${r.atipicas === 1 ? '' : 's'} atípica${r.atipicas === 1 ? '' : 's'}</b> (marcada${r.atipicas === 1 ? '' : 's'} abajo): conviene preguntarle al chofer.` : '',
+    r.en_revision ? `<b class="aviso-txt">${r.en_revision} en revisión:</b> Taxiff confirma si fueron carreras; si lo fueron, aparecen aquí.` : '',
+  ].filter(Boolean).join('<br>');
+  const mes = dia.slice(0, 7);
+  const finMes = new Date(+mes.slice(0, 4), +mes.slice(5, 7), 0).getDate();
+  $('csv').href = `${base()}/carreras.csv?desde=${mes}-01&hasta=${mes}-${finMes}`;
+  $('lista').innerHTML = r.carreras.length ? '' : '<p class="m">No hubo carreras este día.</p>';
+  for (const c of r.carreras.slice().reverse()) $('lista').appendChild(tarjeta(c));
+  pintarLiquidacion(r);
+}
+$('dia').onchange = cargarCarreras;
+
+// ---------------------------------------------------------------- liquidación (una por turno)
+// Cada liquidación dice de dónde sale el monto: lo que dijo el chofer (se compara
+// y avisa si falta) o la lectura del taxímetro (calibra los estimados).
+function pintarLiquidacion(r) {
+  const caja = $('liquidaciones');
+  if (caja.contains(document.activeElement)) return;  // no borrar lo que se está escribiendo
+  // Cerrada, una línea dice cómo va: "Luis entregó $30 ✓ · Pedro: sin anotar".
+  $('liqResumen').textContent = r.grupos.map(g => {
+    const quien = g.nombre || 'El chofer', e = g.reporte?.entregado;
+    if (e === null || e === undefined) return `${quien}: sin anotar`;
+    return `${quien} entregó ${plata(e)}` + (g.cuenta ? (e >= g.cuenta ? ' ✓' : ` (faltan ${plata(g.cuenta - e)})`) : '');
+  }).join(' · ');
+  $('liqCaja').querySelector('.abrir').textContent = r.grupos.every(g => g.reporte?.entregado != null) ? 'Ver ›' : 'Anotar ›';
+  caja.innerHTML = r.grupos.map((g, i) => {
+    const rep = g.reporte;
+    return `<div class="liquidacion" data-i="${i}">
+      <p class="m">${g.nombre ? `<b>${esc(g.nombre)}</b>${g.desde !== null ? ` (${g.desde}:00–${g.hasta}:00)` : ''} · ` : ''}` +
+      (g.carreras ? `${g.carreras} carrera${g.carreras === 1 ? '' : 's'} · Taxiff estima ≈ <b class="dinero">${plata(g.cobro)}</b>`
+        : 'sin carreras (si trabajó, puede que la cámara no haya subido lo grabado)') +
+      (g.cuenta ? ` · cuenta pactada <b>${plata(g.cuenta)}</b>` : '') + `</p>
+      <div class="liq-campos">
+        <label>Te entregó ($)<input class="entregado" type="number" step="0.01" min="0" inputmode="decimal"
+          placeholder="${g.cuenta ? String(g.cuenta).replace('.', ',') : 'Ej. 30'}" value="${rep?.entregado ?? ''}"></label>
+        <label>Cobró en total ($, opcional)<input class="cobrado" type="number" step="0.01" min="0" inputmode="decimal" value="${rep?.monto ?? ''}"></label>
+        <label>Ese total sale de<select class="fuente">
+          <option value="chofer"${rep?.fuente === 'taximetro' ? '' : ' selected'}>Lo que dijo el chofer</option>
+          <option value="taximetro"${rep?.fuente === 'taximetro' ? ' selected' : ''}>Lectura del taxímetro</option>
+        </select></label>
+        <button>Guardar</button>
+      </div>
+      <p class="m resultado">${resultadoLiquidacion(g)}</p></div>`;
+  }).join('') || '<p class="m">Sin carreras este día.</p>';
+  caja.querySelectorAll('.liquidacion').forEach(div => div.querySelector('button').onclick = async () => {
+    const g = r.grupos[div.dataset.i];
+    try {
+      await api(`${base()}/reporte`, { dia: $('dia').value, turno: g.turno, entregado: div.querySelector('.entregado').value,
+        monto: div.querySelector('.cobrado').value, fuente: div.querySelector('.fuente').value });
+      document.activeElement.blur();
+      await cargarCarreras();
+      cargarResumen();
+    } catch (e) { div.querySelector('.resultado').innerHTML = `<span class="mal">${esc(e.message)}</span>`; }
+  });
+}
+function resultadoLiquidacion(g) {
+  const rep = g.reporte;
+  if (!rep) return 'Al guardar se compara con la cuenta y con lo estimado. Todo vacío = borrar.';
+  const partes = [];
+  if (rep.entregado !== null && g.cuenta) {
+    const falta = Math.round((g.cuenta - rep.entregado) * 100) / 100;
+    partes.push(`Entregó <b>${plata(rep.entregado)}</b> de ${plata(g.cuenta)}` +
+      (falta > 0 ? `: <b class="aviso-txt">faltan ${plata(falta)}</b>.` : falta < 0 ? `: ${plata(-falta)} de más.` : ': completo ✓.'));
+  } else if (rep.entregado !== null) partes.push(`Entregó <b>${plata(rep.entregado)}</b>.`);
+  if (rep.monto !== null) partes.push(comparacionCobro(g));
+  return partes.join(' ');
+}
+function comparacionCobro(g) {
+  const rep = g.reporte, est = g.cobro;
+  const quien = rep.fuente === 'taximetro' ? 'El taxímetro marcó' : 'Dijo que cobró';
+  if (est < 3) return `${quien} <b>${plata(rep.monto)}</b>. Con tan pocas carreras la comparación no dice mucho.`;
+  const dif = Math.round(100 * (rep.monto - est) / est);
+  const comparado = `${quien} <b>${plata(rep.monto)}</b>: ` +
+    (Math.abs(dif) <= 5 ? 'casi igual a lo estimado.' : `${Math.abs(dif)} % ${dif < 0 ? 'menos' : 'más'} que lo estimado.`);
+  if (rep.fuente === 'taximetro') return comparado + ' Sirve para calibrar los estimados (Ajustes).';
+  return comparado + (dif < -20 ? ' <b class="aviso-txt">Bastante menos de lo esperado: revisa las carreras.</b>'
+    : Math.abs(dif) <= 20 ? ' Dentro de lo normal (±20 %): el estimado no es exacto.' : '');
+}
+
+function tarjeta(c) {
+  const art = document.createElement('article');
+  art.className = 'card carrera' + (c.atipica ? ' atipica' : '');
+  art.tabIndex = 0;
+  art.innerHTML = `
+    <div class="fila">
+      <div><div class="horas">${horaCorta(c.inicio)} → ${horaCorta(c.fin)}</div>
+        <div class="m">${durLarga(c.duracion)}${c.noche ? ' · <span class="chip noche">nocturna</span>' : ''}` +
+        `${c.chofer ? ` · ${esc(c.chofer)}` : ''}${c.atipica ? ' · <span class="chip aviso">atípica</span>' : ''}</div></div>
+      <div class="pax"><b>${c.pasajeros}</b><span>pasajero${c.pasajeros === 1 ? '' : 's'}</span></div>
+    </div>
+    <div class="fila"><span class="cobro">≈ ${plata(c.cobro)}</span><span class="m">≈ ${kms(c.km)}${c.km_de === 'gps' ? ' (GPS)' : ''}</span></div>
+    <div class="m">${lineaDeTiempo(c.eventos)}</div>
+    <div class="ver-mas"><span>🗺️ Ver recorrido y detalle</span><span aria-hidden="true">›</span></div>`;
+  art.onclick = art.onkeydown = e => { if (e.type === 'click' || e.key === 'Enter') abrirDetalle(c); };
+  return art;
+}
+
+// ---------------------------------------------------------------- detalle (con el hueco del mapa)
+async function abrirDetalle(c) {
+  $('detalle').hidden = false;
+  $('dTitulo').textContent = `${fechaCorta(c.inicio)} · ${horaCorta(c.inicio)} → ${horaCorta(c.fin)}`;
+  $('dDuracion').textContent = durLarga(c.duracion);
+  $('dPax').textContent = c.pasajeros;
+  $('dKm').textContent = kms(c.km);
+  $('dCobro').textContent = plata(c.cobro);
+  const k = c.calculo, bruto = k.arranque + c.km * k.por_km;
+  $('dCalculo').innerHTML = (c.atipica ? `<b class="aviso-txt">Carrera atípica, ${esc(c.atipica)}.</b> ` : '') +
+    (c.chofer ? `Chofer: <b>${esc(c.chofer)}</b>. ` : '') +
+    `Tarifa ${c.noche ? 'nocturna' : 'diurna'}: arranque ${plata(k.arranque)} + ${kms(c.km)} × ${plata(k.por_km)} = ${plata(bruto)}` +
+    (bruto < k.minima ? `, menos que la mínima: se cuenta ${plata(k.minima)}` : '') +
+    (c.ajuste !== 1 ? `; × ${String(c.ajuste).replace('.', ',')} por la calibración con el taxímetro = <b>${plata(c.cobro)}</b>.` : '.') +
+    (c.km_de === 'gps' ? ' Los km salen del recorrido del GPS.'
+      : ` Los km salen del tiempo: ${durLarga(c.duracion)} a ${tarifa?.vel_kmh ?? 18} km/h de promedio (sin GPS).`);
+  $('dEventos').innerHTML = (c.eventos || []).map(([ts, tipo, n, abordo]) =>
+    `<div class="evento sin-foto ${tipo}"><div><b>${new Date(ts * 1000).toLocaleTimeString('es-ES')}</b><br>` +
+    `${tipo === 'sube' ? (n > 1 ? `suben ${n}` : 'sube 1') : (n > 1 ? `bajan ${n}` : 'baja 1')}` +
+    `<br><span class="m">quedan ${abordo} a bordo</span></div></div>`).join('') || '<p class="m">Sin detalle.</p>';
+  dibujarMapa([]);
+  try { dibujarMapa((await api(`${base()}/carrera/${c.id}`)).recorrido || []); } catch (e) {}
+}
+$('dCerrar').onclick = () => $('detalle').hidden = true;
+document.addEventListener('keydown', e => { if (e.key === 'Escape') $('detalle').hidden = true; });
+
+// Sin GPS: un mapa de ejemplo apagado con el aviso. Con puntos: el recorrido real
+// (sobre una cuadrícula, sin calles de fondo todavía), del verde (subió) al rojo (bajó).
+function dibujarMapa(puntos) {
+  let calles = [
+    'M0 60 H800', 'M0 170 H800', 'M0 290 H800', 'M0 390 H800',
+    'M90 0 V450', 'M260 0 V450', 'M430 0 V450', 'M610 0 V450', 'M720 0 V450', 'M0 420 L800 20'];
+  let ruta = '<path class="ruta" d="M150 360 C 220 300, 240 220, 330 200 S 520 190, 560 120 S 660 90, 690 70"/>' +
+    '<circle class="pin inicio" cx="150" cy="360" r="11"/><circle class="pin fin" cx="690" cy="70" r="11"/>';
+  let aviso = `<div class="aviso"><b>Recorrido: próximamente</b><br><span class="m">La cámara no tiene GPS. Cuando el taxi lo tenga (módulo GPS o el celular del conductor), aquí se verá por dónde fue cada carrera y los km serán exactos.</span></div>`;
+  if (puntos.length >= 2) {
+    // Centrado en la parte que se ve siempre: en el celular el mapa es 4:3 y
+    // el dibujo (16:9) pierde 100 de ancho por cada lado.
+    const [cx, cy, ancho, alto] = [400, 225, 520, 370];
+    const lat0 = puntos[0][1] * Math.PI / 180;
+    const xs = puntos.map(p => p[2] * Math.cos(lat0)), ys = puntos.map(p => -p[1]);
+    const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    const esc_ = Math.min(ancho / Math.max(x1 - x0, 1e-6), alto / Math.max(y1 - y0, 1e-6));
+    const P = i => [cx + (xs[i] - (x0 + x1) / 2) * esc_, cy + (ys[i] - (y0 + y1) / 2) * esc_];
+    const d = puntos.map((_, i) => (i ? 'L' : 'M') + P(i).map(v => v.toFixed(1)).join(' ')).join(' ');
+    const [a, b] = [P(0), P(puntos.length - 1)];
+    ruta = `<path class="ruta real" d="${d}"/><circle class="pin inicio" cx="${a[0]}" cy="${a[1]}" r="11"/>` +
+      `<circle class="pin fin" cx="${b[0]}" cy="${b[1]}" r="11"/>`;
+    // Las calles de ejemplo no coinciden con el recorrido: solo una cuadrícula de fondo.
+    calles = [...Array(9)].map((_, i) => `M${i * 100} 0 V450`).concat([...Array(5)].map((_, i) => `M0 ${i * 100 + 25} H800`));
+    aviso = '';
+  }
+  $('dMapa').innerHTML = `<svg viewBox="0 0 800 450" preserveAspectRatio="xMidYMid slice" aria-label="Recorrido de la carrera">` +
+    calles.map(d => `<path class="calle${puntos.length >= 2 ? ' fina' : ''}" d="${d}"/>`).join('') + ruta + '</svg>' + aviso;
+  $('dMapa').classList.toggle('sin-gps', puntos.length < 2);
+}
+
+// ---------------------------------------------------------------- kilometraje
+function pintarOdometro(o) {
+  const ocupacion = (10 / o.factor).toFixed(1).replace('.', ',');
+  const origen = o.factor_de === 'lecturas' ? 'según tus lecturas'
+    : 'valor de referencia: con dos lecturas separadas por unos días se calcula el de tu taxi';
+  $('odo').innerHTML = o.estimado === null
+    ? `<b>Empieza anotando el kilometraje de hoy</b>
+       <p class="m">Escribe lo que marca el odómetro. Desde ahí Taxiff suma los km de las carreras y estima cuánto anda tu taxi en total.</p>`
+    : `<span class="m">Kilometraje estimado hoy</span><div class="cifra-grande">≈ ${kmEnteros(o.estimado)}</div>
+       <div class="k" style="margin-top:12px">
+         <div><b>${kmEnteros(o.ultima.km)}</b><span>última lectura · ${fechaCorta(o.ultima.fecha)}</span></div>
+         <div><b>≈ ${kmEnteros(o.desde_ultima)}</b><span>desde entonces (≈ ${kms(o.desde_ultima_con_pax)} con pasajeros)</span></div>
+         <div><b>≈ ${kmEnteros(o.desde_inicio)}</b><span>desde que empezaste · ${fechaCorta(o.inicio.fecha)}</span></div>
+       </div>
+       <p class="m">De cada 10 km que anda el taxi, ≈ ${ocupacion} son con pasajeros (${origen}).</p>`;
+  // Km vacíos entre cada par de lecturas (los más nuevos arriba).
+  $('cardTramos').hidden = !o.tramos.length;
+  $('tramos').innerHTML = o.tramos.map(t => {
+    const pct = t.ocupacion === null ? null : Math.round(100 * t.ocupacion);
+    const estado = pct === null ? '' : pct < 35 ? `<span class="chip ${pct === 0 ? 'mal' : 'aviso'}">${pct} % con pasajeros</span>`
+      : `<span class="m">${pct} % con pasajeros</span>`;
+    return `<div class="lectura"><div><b>${fechaCorta(t.desde)} → ${fechaCorta(t.hasta)}</b> ${estado}` +
+      `<div class="m">el odómetro marcó ${kmEnteros(t.km)} · Taxiff vio ≈ ${kms(t.con_pax)} con pasajeros · ≈ ${kmEnteros(Math.max(0, t.km - t.con_pax))} vacíos</div></div></div>`;
+  }).join('');
+  $('lecturas').innerHTML = o.lecturas.length ? o.lecturas.map(l =>
+    `<div class="lectura"><div><b>${kmEnteros(l.km)}</b> <span class="m">${new Date(l.fecha * 1000).toLocaleString('es-ES', { dateStyle: 'medium', timeStyle: 'short' })}</span>` +
+    (l.nota ? `<div class="m">${esc(l.nota)}</div>` : '') + `</div><button class="fantasma" data-id="${l.id}">Borrar</button></div>`).join('')
+    : '<p class="m">Todavía no hay lecturas.</p>';
+  $('lecturas').querySelectorAll('button').forEach(b => b.onclick = async () => {
+    if (!confirm('¿Borrar esta lectura?')) return;
+    pintarOdometro(await api(`${base()}/odometro/${b.dataset.id}/borrar`, {}));
+    cargarResumen();
+  });
+}
+// Los km vacíos y el mantenimiento dependen de anotar el odómetro: sin lectura, o
+// con la última de hace más de 7 días, se pide al entrar. "Recordarme mañana" lo
+// pospone 24 h en este celular. Al admin que mira la página del dueño no se le pide.
+const ODO_CADA_S = 7 * 86400;
+const claveLuego = () => 'taxiff_odo_luego_' + taxi;
+function pedirOdometro(o) {
+  if (yo.rol === 'admin') return;
+  const hace = o.estimado === null ? null : Date.now() / 1000 - o.ultima.fecha;
+  if (hace !== null && hace < ODO_CADA_S) return;
+  let luego = 0;
+  try { luego = +localStorage.getItem(claveLuego()) || 0; } catch (e) {}
+  if (Date.now() < luego) return;
+  $('poTexto').textContent = hace === null
+    ? 'Todavía no anotaste lo que marca el odómetro. Con eso Taxiff calcula los km que anda tu taxi, cuántos son vacíos y cuándo toca el mantenimiento.'
+    : `La última lectura es de hace ${Math.floor(hace / 86400)} días. Anótala de nuevo para que los km vacíos y el mantenimiento sigan siendo exactos.`;
+  $('poError').textContent = '';
+  $('pedirOdo').hidden = false;
+  $('poKm').focus();
+}
+$('poGuardar').onclick = async () => {
+  if (!$('poKm').value) { $('poError').textContent = 'Escribe los km que marca el odómetro.'; return; }
+  try {
+    pintarOdometro(await api(`${base()}/odometro`, { km: +$('poKm').value }));
+    $('pedirOdo').hidden = true;
+    $('poKm').value = '';
+    cargarResumen();
+  } catch (e) { $('poError').textContent = e.message; }
+};
+$('poLuego').onclick = () => {
+  try { localStorage.setItem(claveLuego(), String(Date.now() + 86400000)); } catch (e) {}
+  $('pedirOdo').hidden = true;
+};
+
+const ahoraLocal = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+$('oFecha').value = ahoraLocal();
+$('oGuardar').onclick = async () => {
+  $('oError').textContent = '';
+  if (!$('oKm').value) { $('oError').textContent = 'Escribe los km que marca el odómetro.'; return; }
+  try {
+    const o = await api(`${base()}/odometro`, { km: +$('oKm').value, fecha: new Date($('oFecha').value).getTime() / 1000 || null, nota: $('oNota').value });
+    $('oKm').value = $('oNota').value = '';
+    $('oFecha').value = ahoraLocal();
+    pintarOdometro(o);
+    cargarResumen();
+  } catch (e) { $('oError').textContent = e.message; }
+};
+
+// ---------------------------------------------------------------- tarifa
+const camposTarifa = () => [...document.querySelectorAll('#tab-tarifa input[data-k]')];
+function pintarTarifa(t) {
+  tarifa = t;
+  for (const i of camposTarifa()) i.value = t[i.dataset.k];
+  $('aAjustar').checked = !!t.ajustar;
+  if (document.activeElement !== $('cuentaDiaria')) $('cuentaDiaria').value = t.cuenta || '';
+  ejemploTarifa();
+}
+function pintarAjuste(a) {
+  const dif = m => Math.round(100 * Math.abs(1 - m));
+  $('aMedido').innerHTML = !a.medido
+    ? `<span class="m">Hacen falta al menos 3 liquidaciones con <b>lectura del taxímetro</b> (en Carreras). Llevas ${a.dias}.</span>`
+    : `En ${a.dias} lecturas del taxímetro, el taxímetro marcó en general ` +
+      (dif(a.medido) <= 5 ? '<b>casi lo mismo</b> que estima la tarifa: está bien ajustada.' : `<b>${dif(a.medido)} % ${a.medido < 1 ? 'menos' : 'más'}</b> de lo que estima la tarifa.`) +
+      (a.factor !== 1 ? ' <span class="ok">Calibración activada.</span>' : '');
+  // Lo que dice el chofer solo se muestra, como referencia.
+  $('aChofer').innerHTML = a.chofer
+    ? `Como referencia, en ${a.dias_chofer} liquidaciones el chofer dijo en general ${dif(a.chofer) <= 5 ? 'casi lo mismo que la tarifa'
+      : `${dif(a.chofer)} % ${a.chofer < 1 ? 'menos' : 'más'} que la tarifa`}. Eso no cambia los estimados.` : '';
+}
+
+// ---------------------------------------------------------------- turnos (choferes)
+let turnos = [];
+function pintarTurnos(lista) {
+  turnos = lista;
+  $('turnos').innerHTML = lista.length ? lista.map(t => `
+    <div class="lectura"><div><b>${esc(t.nombre)}</b> <span class="m">de ${t.desde}:00 a ${t.hasta}:00${t.hasta <= t.desde ? ' (pasa la medianoche)' : ''}` +
+      `${t.cuenta ? ` · cuenta ${plata(t.cuenta)}` : ' · sin cuenta pactada'}</span></div>
+      <div class="acciones-fila"><button class="fantasma" data-borrar="${t.id}">Borrar</button></div></div>`).join('')
+    : '<p class="m">Sin turnos: todas las carreras del día van juntas.</p>';
+  $('turnos').querySelectorAll('[data-borrar]').forEach(b => b.onclick = async () => {
+    if (!confirm('¿Borrar este turno? Sus carreras pasan a "Fuera de turno".')) return;
+    pintarTurnos(await api(`${base()}/turnos`, { id: +b.dataset.borrar, borrar: true }));
+    alCambiarTurnos();
+  });
+  const sel = $('hTurno'), antes = sel.value;
+  sel.innerHTML = '<option value="0">Todos</option>' + lista.map(t => `<option value="${t.id}">${esc(t.nombre)}</option>`).join('');
+  sel.value = lista.some(t => String(t.id) === antes) ? antes : '0';
+  sel.hidden = !lista.length;
+  $('sinTurnos').hidden = lista.length > 0;  // la cuenta diaria del taxi solo vale sin turnos
+  $('tuNuevo').open = !lista.length;
+}
+$('cuentaGuardar').onclick = () => guardarTarifa({ cuenta: $('cuentaDiaria').value || 0 });
+function alCambiarTurnos() { cargarResumen(); cargarCarreras(); cargarHoras(); }
+$('tuGuardar').onclick = async () => {
+  $('tuError').textContent = '';
+  try {
+    pintarTurnos(await api(`${base()}/turnos`, { nombre: $('tuNombre').value, desde: $('tuDesde').value, hasta: $('tuHasta').value,
+      cuenta: $('tuCuenta').value }));
+    $('tuNombre').value = $('tuDesde').value = $('tuHasta').value = $('tuCuenta').value = '';
+    alCambiarTurnos();
+  } catch (e) { $('tuError').textContent = e.message; }
+};
+$('aAjustar').onchange = () => guardarTarifa({ ajustar: $('aAjustar').checked ? 1 : 0 });
+
+// ---------------------------------------------------------------- mantenimiento
+const ESTADO_MANT = {
+  ok: m => `<span class="m">faltan ≈ ${kmEnteros(m.faltan_km)}</span>`,
+  pronto: m => `<span class="chip aviso">faltan ≈ ${kmEnteros(m.faltan_km)}</span>`,
+  vencido: m => `<span class="chip mal">se pasó ≈ ${kmEnteros(-m.faltan_km)}</span>`,
+  sin_km: () => '<span class="m">anota el odómetro para calcular</span>',
+};
+function pintarMantenimiento(lista) {
+  $('mLista').innerHTML = lista.length ? lista.map(m => `
+    <div class="lectura"><div><b>${esc(m.nombre)}</b> ${ESTADO_MANT[m.estado](m)}
+      <div class="m">cada ${kmEnteros(m.cada_km)} · la última a ${kmEnteros(m.ultimo_km)} · la próxima a ${kmEnteros(m.proximo_km)}</div></div>
+      <div class="acciones-fila"><button class="fantasma" data-hecho="${m.id}">Hecho hoy</button><button class="fantasma" data-borrar="${m.id}">Borrar</button></div></div>`).join('')
+    : '<p class="m">Agrega el cambio de aceite u otros, y Taxiff te avisa cuando se acerquen.</p>';
+  $('mLista').querySelectorAll('[data-hecho]').forEach(b => b.onclick = async () => {
+    if (!confirm('¿Se hizo hoy? Se anota al kilometraje estimado de hoy.')) return;
+    pintarMantenimiento(await api(`${base()}/mantenimiento/${b.dataset.hecho}`, { hecho: true }));
+    cargarResumen();
+  });
+  $('mLista').querySelectorAll('[data-borrar]').forEach(b => b.onclick = async () => {
+    if (!confirm('¿Borrar este mantenimiento?')) return;
+    pintarMantenimiento(await api(`${base()}/mantenimiento/${b.dataset.borrar}`, { borrar: true }));
+    cargarResumen();
+  });
+}
+$('mSugeridos').querySelectorAll('button').forEach(b => b.onclick = () => {
+  $('mNombre').value = b.dataset.n;
+  $('mCada').value = b.dataset.c;
+  $('mUltimo').focus();
+});
+$('mGuardar').onclick = async () => {
+  $('mError').textContent = '';
+  try {
+    pintarMantenimiento(await api(`${base()}/mantenimiento`, { nombre: $('mNombre').value, cada_km: $('mCada').value, ultimo_km: $('mUltimo').value }));
+    $('mNombre').value = $('mCada').value = $('mUltimo').value = '';
+    $('mNuevo').open = false;
+    cargarResumen();
+  } catch (e) { $('mError').textContent = e.message; }
+};
+// Ejemplo en vivo: una carrera de 15 min de día con los valores escritos.
+function ejemploTarifa() {
+  const v = Object.fromEntries(camposTarifa().map(i => [i.dataset.k, +i.value || 0]));
+  const km = 0.25 * v.vel_kmh, cobro = Math.max(v.minima, v.arranque + km * v.km);
+  $('tEjemplo').innerHTML = `Ejemplo: una carrera de 15 min de día ≈ ${kms(km)} ≈ <b class="dinero">${plata(cobro)}</b>.`;
+}
+camposTarifa().forEach(i => i.oninput = ejemploTarifa);
+async function guardarTarifa(cuerpo) {
+  $('tError').textContent = '';
+  try {
+    pintarTarifa(await api(`${base()}/tarifa`, cuerpo));
+    $('tError').innerHTML = '<span class="ok">✓ Guardada. Las carreras se recalculan con esta tarifa.</span>';
+    await cargarResumen();
+    cargarCarreras();
+    cargarHoras();
+  } catch (e) { $('tError').textContent = e.message; }
+}
+$('tGuardar').onclick = () => guardarTarifa(Object.fromEntries(camposTarifa().map(i => [i.dataset.k, +i.value])));
+$('tRestablecer').onclick = () => confirm('¿Volver a la tarifa de referencia?') && guardarTarifa({ restablecer: true });
+
+// ---------------------------------------------------------------- dinero
+// Lo que entregaron los choferes, los gastos, lo que queda y los pagos que vencen.
+const hoyTexto = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+$('mesDinero').value = hoyTexto().slice(0, 7);
+let dinero = null, verTodosGastos = false;
+async function cargarDinero() {
+  const mes = $('mesDinero').value || hoyTexto().slice(0, 7);
+  $('informe').href = `${base()}/informe.docx?mes=${mes}`;
+  dinero = await api(`${base()}/dinero?mes=${mes}`);
+  const d = dinero, queda = d.utilidad;
+  $('dIngresos').textContent = plata(d.ingresos);
+  $('dGastos').textContent = plata(d.gastos);
+  $('dQueda').textContent = (queda < 0 ? '−' : '') + plata(Math.abs(queda));
+  $('dQueda').className = queda < 0 ? 'mal' : 'dinero';
+  $('dCostoKm').textContent = d.costo_km !== null ? plata(d.costo_km) : '–';
+  $('dNota').innerHTML = `${d.carreras.carreras} carreras · ≈ ${kmEnteros(d.km_total)} recorridos (≈ ${kms(d.km_con_pax)} con pasajeros)` +
+    (queda < 0 ? ` · <b class="mal">este mes el taxi pierde ${plata(-queda)}</b>` : '');
+  // Choferes: lo que debía entregar contra lo que entregó.
+  $('tablaChoferes').innerHTML = '<tr class="m"><td>Chofer</td><td>Jornadas</td><td>Debía</td><td>Entregó</td><td>Falta</td></tr>' +
+    d.choferes.map(c => `<tr><td>${esc(c.nombre || 'Chofer')}${c.cuenta ? `<div class="m">cuenta ${plata(c.cuenta)}</div>` : ''}</td>` +
+      `<td>${c.jornadas}</td><td>${c.esperado !== null ? plata(c.esperado) : '–'}</td><td class="dinero">${plata(c.entregado)}</td>` +
+      `<td${c.pendiente > 0 ? ' class="mal"' : ''}>${c.pendiente !== null ? (c.pendiente > 0 ? plata(c.pendiente) : '✓') : '–'}</td></tr>`).join('');
+  // Gastos por grupo (barritas) y la lista del mes.
+  const max = Math.max(1, ...d.por_grupo.map(g => g.monto));
+  $('gGrupos').innerHTML = d.por_grupo.map(g => `<div class="grupo-gasto"><div class="fila"><span>${esc(g.grupo)}</span><b>${plata(g.monto)}</b></div>` +
+    `<div class="barrita ancha"><span style="width:${Math.round(100 * g.monto / max)}%"></span></div></div>`).join('');
+  // Los 8 más nuevos; el resto, al tocar "Ver todos".
+  const visibles = verTodosGastos ? d.lista_gastos : d.lista_gastos.slice(0, 5);
+  $('gLista').innerHTML = d.lista_gastos.length ? visibles.map(g => `
+    <div class="lectura compacta"><div><b>${plata(g.monto)}</b> <span class="chip">${esc(g.categoria)}</span>
+      <div class="m">${new Date(g.fecha + 'T12:00').toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })}` +
+      [g.descripcion, g.lugar, g.pago, g.km ? kmEnteros(g.km) : ''].filter(Boolean).map(x => ' · ' + esc(x)).join('') + `</div></div>
+      <button class="quitar-x" data-borrar="${g.id}" title="Borrar este gasto" aria-label="Borrar este gasto">✕</button></div>`).join('') +
+      (d.lista_gastos.length > visibles.length ? `<button class="fantasma" id="gTodos">Ver los ${d.lista_gastos.length} gastos del mes</button>` : '')
+    : '<p class="m">Todavía no hay gastos este mes.</p>';
+  if ($('gTodos')) $('gTodos').onclick = () => { verTodosGastos = true; cargarDinero(); };
+  $('gLista').querySelectorAll('[data-borrar]').forEach(b => b.onclick = async () => {
+    if (!confirm('¿Borrar este gasto?')) return;
+    await api(`${base()}/gastos`, { id: +b.dataset.borrar, borrar: true });
+    cargarDinero();
+  });
+  // Opciones de los formularios (una sola vez).
+  if (!$('gCategoria').options.length) {
+    $('gCategoria').innerHTML = d.categorias.map(c => `<option>${esc(c)}</option>`).join('');
+    $('pCategoria').innerHTML = $('gCategoria').innerHTML;
+    $('gPago').insertAdjacentHTML('beforeend', d.formas_pago.map(p => `<option>${esc(p)}</option>`).join(''));
+  }
+  pintarPagos(await api(`${base()}/recordatorios`));
+}
+$('mesDinero').onchange = () => { verTodosGastos = false; cargarDinero(); };
+
+function abrirGasto(categoria) {
+  $('gForm').hidden = false;
+  $('gCategoria').value = categoria;
+  $('gFecha').value = hoyTexto();
+  $('gError').textContent = '';
+  const mants = resumen?.mantenimiento || [];
+  $('gMant').innerHTML = '<option value="">No</option>' + mants.map(m => `<option value="${m.id}">${esc(m.nombre)}</option>`).join('');
+  $('gMantL').hidden = !mants.length;
+  // Un gasto de aceite propone dejar hecho el mantenimiento que se llame parecido.
+  const parecido = mants.find(m => categoria !== 'Otros' && m.nombre.toLowerCase().includes(categoria.split(' ').pop().toLowerCase()));
+  $('gMant').value = parecido ? parecido.id : '';
+  $('gMonto').focus();
+}
+$('gRapidos').querySelectorAll('button').forEach(b => b.onclick = () => abrirGasto(b.dataset.c));
+$('gCancelar').onclick = () => { $('gForm').hidden = true; };
+$('gForm').onsubmit = async e => {
+  e.preventDefault();
+  $('gError').textContent = '';
+  try {
+    await api(`${base()}/gastos`, { fecha: $('gFecha').value, categoria: $('gCategoria').value, monto: $('gMonto').value,
+      descripcion: $('gDesc').value, lugar: $('gLugar').value, pago: $('gPago').value, km: $('gKm').value,
+      mantenimiento: $('gMant').value || null });
+    for (const i of ['gMonto', 'gDesc', 'gLugar', 'gKm']) $(i).value = '';
+    $('gForm').hidden = true;
+    await cargarDinero();
+    cargarResumen();
+  } catch (err) { $('gError').textContent = err.message; }
+};
+
+// Pagos que vencen por fecha.
+function pintarPagos(lista) {
+  $('pLista').innerHTML = lista.length ? lista.map(p => {
+    const n = p.dias;
+    const cuando = n < 0 ? `<span class="chip mal">venció hace ${-n} día${n < -1 ? 's' : ''}</span>`
+      : n <= 5 ? `<span class="chip aviso">${n === 0 ? 'vence hoy' : n === 1 ? 'vence mañana' : `en ${n} días`}</span>`
+      : `<span class="m">en ${n} días</span>`;
+    return `<div class="lectura"><div><b>${esc(p.nombre)}</b> ${cuando}
+      <div class="m">${new Date(p.proxima + 'T12:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}` +
+      `${p.monto ? ' · ' + plata(p.monto) : ''} · ${{ mensual: 'cada mes', anual: 'cada año', una_vez: 'una vez' }[p.frecuencia]}</div></div>
+      <div class="acciones-fila"><button data-pagado="${p.id}">Pagado</button><button class="fantasma" data-borrar="${p.id}">Borrar</button></div></div>`;
+  }).join('') : '<p class="m">Agrega lo que pagas cada mes o cada año, y Taxiff te avisa antes.</p>';
+  $('pLista').querySelectorAll('[data-pagado]').forEach(b => b.onclick = async () => {
+    const p = lista.find(x => x.id === +b.dataset.pagado);
+    const monto = prompt(`¿Cuánto pagaste por "${p.nombre}"? (queda como gasto de hoy)`, p.monto ? String(p.monto).replace('.', ',') : '');
+    if (monto === null) return;
+    pintarPagos(await api(`${base()}/recordatorios`, { id: p.id, pagado: true, monto }));
+    cargarDinero();
+    cargarResumen();
+  });
+  $('pLista').querySelectorAll('[data-borrar]').forEach(b => b.onclick = async () => {
+    if (!confirm('¿Borrar este pago? Ya no se va a avisar.')) return;
+    pintarPagos(await api(`${base()}/recordatorios`, { id: +b.dataset.borrar, borrar: true }));
+    cargarResumen();
+  });
+}
+$('pSugeridos').querySelectorAll('button').forEach(b => b.onclick = () => {
+  $('pNombre').value = b.dataset.n;
+  $('pCategoria').value = b.dataset.c;
+  $('pFrec').value = b.dataset.f;
+  $('pMonto').focus();
+});
+$('pGuardar').onclick = async () => {
+  $('pError').textContent = '';
+  try {
+    pintarPagos(await api(`${base()}/recordatorios`, { nombre: $('pNombre').value, categoria: $('pCategoria').value,
+      monto: $('pMonto').value, frecuencia: $('pFrec').value, proxima: $('pProxima').value }));
+    for (const i of ['pNombre', 'pMonto', 'pProxima']) $(i).value = '';
+    $('pNuevo').open = false;
+    cargarResumen();
+  } catch (e) { $('pError').textContent = e.message; }
+};
+
+iniciar();
+// Mientras miras, se actualiza solo (la carrera en curso, lo de hoy).
+setInterval(() => {
+  if (!taxi || !$('detalle').hidden || document.hidden) return;
+  cargarResumen();
+  if (pestana === 'carreras' && $('dia').selectedIndex === 0) cargarCarreras();
+}, 20000);
+</script>
+</body>
+</html>

@@ -9,7 +9,7 @@ Qué está protegido en Taxiff, cómo y quién puede ver qué. Vigente desde el 
 | Quién | Qué puede hacer | Cómo |
 |---|---|---|
 | **Empresa (tú)** | Todo: panel, fotos, carreras, registro, ajustes. En la cámara: imagen en vivo, ajustes y fotos | Panel: usuario `admin` y clave del panel. Cámara: usuario `admin` y la **clave de administración** |
-| **Dueño del taxi** | Solo elegir la WiFi de la cámara | Conectado a la red `Taxiff-Cam`. Desde su WiFi de casa **no** puede abrir nada |
+| **Dueño del taxi** | En taxiff.site: las carreras de **sus** taxis, con el cobro y los km estimados, su odómetro y su tarifa. **Nunca** fotos, imagen en vivo, registro ni ajustes de la cámara. En la cámara: solo elegir la WiFi | Taxiff.site: su usuario y clave (la cuenta la crea la empresa). Cámara: conectado a la red `Taxiff-Cam`; desde su WiFi de casa **no** puede abrir nada |
 | **Cualquier otra persona** | Nada | Todo pide clave |
 
 ### Clave de administración de la cámara
@@ -97,7 +97,26 @@ cd "C:\Users\ASUS Vivobook\Desktop\taxiff\esp32\herramientas"
 ### Panel web
 
 - Por el túnel de Cloudflare, el panel va siempre por HTTPS.
-- Pide usuario y clave (`admin` / `TAXIFF_CLAVE_PANEL`). **Cambia la clave por defecto `taxiff`** antes de usarlo fuera de casa: variable `TAXIFF_CLAVE_PANEL` en `servidor/.env`.
+- Se entra por la página `/entrar`. El administrador entra con `admin` / `TAXIFF_CLAVE_PANEL`. **Cambia la clave por defecto `taxiff`** antes de usarlo fuera de casa: variable `TAXIFF_CLAVE_PANEL` en `servidor/.env`.
+- **Sesión:** una cookie firmada (HMAC-SHA256) que dura 30 días.
+  - No se puede leer desde JavaScript (`HttpOnly`), no se manda desde otros sitios (`SameSite=Lax`) y solo viaja por HTTPS.
+  - La clave para firmarla está en `servidor/datos/secreto_sesion`. Se crea sola y no se sube a GitHub. Si la borras, se cierran todas las sesiones.
+- **Cuentas de dueños:**
+  - La clave se guarda como hash PBKDF2-SHA256 (200 000 vueltas, con sal propia). Nadie puede leerla, ni desde el panel.
+  - Cambiar la clave o desactivar la cuenta cierra al momento las sesiones abiertas de ese dueño.
+- **Intentos:** más de 8 entradas fallidas en 10 minutos desde la misma IP bloquean esa IP unos minutos. Cada intento fallido queda en `servidor.log`.
+- **Cada dueño solo ve sus taxis.** Si pide un taxi ajeno, el servidor responde "no existe" (404). Si pide algo del panel o una foto, responde "prohibido" (403). Hay pruebas automáticas de esto.
+- HTTP Basic con la clave del panel sigue funcionando para scripts.
+
+### Privacidad de los pasajeros
+
+- **Difuminar a las personas** (panel → **Privacidad**; viene apagado). Si se activa, cada persona detectada se desenfoca antes de guardar la foto en el servidor.
+  - Lo que no cambia:
+    - las fotos ya guardadas;
+    - las fotos cifradas en la tarjeta SD de la cámara, que solo se pueden ver con la clave de la cámara.
+  - Lo que se pierde: comprobar a ojo si era una persona, y usar esas fotos para entrenar el modelo.
+- **El dueño del taxi nunca ve fotos**, tenga o no el difuminado.
+- **Fotos que no son evidencia de una carrera:** se borran a las 72 h.
 
 ### Lo que todavía NO está cifrado
 

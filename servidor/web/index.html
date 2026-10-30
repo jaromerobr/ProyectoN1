@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Taxiff · Panel</title>
-<link rel="stylesheet" href="/web/estilo.css?v=4">
+<link rel="stylesheet" href="/web/estilo.css?v=13">
 <link rel="icon" href="data:,">
 </head>
 <body>
-<header><h1>Taxiff</h1><span class="m" id="resumen"></span></header>
+<header><h1>Taxiff</h1><span class="m" id="resumen"></span><span class="espacio"></span><a class="m" href="/salir">Salir</a></header>
 <main>
   <section>
     <h2>Taxis</h2>
@@ -16,8 +16,35 @@
     <p class="m" id="vacio" hidden>Todavía no se conectó ninguna cámara. Cuando un ESP32 envíe su primera foto aparecerá aquí.</p>
   </section>
   <section>
+    <div class="fila"><h2>Dueños</h2><span class="m">Cada dueño entra en taxiff.site con su usuario y solo ve las carreras de sus taxis, con el cobro y los km estimados. Nunca las fotos.</span></div>
+    <div class="card">
+      <div id="duenos" class="duenos"></div>
+      <details id="nuevoDueno">
+        <summary><b>+ Crear cuenta de dueño</b></summary>
+        <div class="formulario">
+          <label>Nombre<input id="nNombre" placeholder="Ej. Juan Pérez"></label>
+          <label>Usuario (para entrar)<input id="nUsuario" placeholder="Ej. juan.perez" autocapitalize="none" spellcheck="false"></label>
+          <label>Clave (8 o más)<input id="nClave" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <div class="fila botones"><button id="nCrear">Crear cuenta</button><button class="fantasma" id="nGenerar">Generar clave</button></div>
+        <p class="m" id="nMsg"></p>
+      </details>
+    </div>
+  </section>
+  <section>
     <div class="fila"><h2>Últimas carreras</h2><a class="m" id="csv" href="/api/panel/carreras.csv">Descargar todas para Excel (CSV)</a></div>
     <div class="card"><table id="carreras" class="tabla-carreras"></table></div>
+  </section>
+  <section>
+    <h2>Privacidad</h2>
+    <div class="card">
+      <label class="interruptor"><input type="checkbox" id="difuminar">
+        <span><b>Difuminar a las personas en las fotos que se guardan</b></span></label>
+      <p class="m">Desenfoca a cada persona detectada antes de guardar la foto en el servidor, para cumplir la Ley de Protección de Datos Personales.
+        El conteo, la jaula y el reanálisis siguen funcionando igual. <b>Pero:</b> ya no podrás comprobar en la foto si de verdad era una persona,
+        y esas fotos no sirven para entrenar el modelo (las fotos de entrenamiento de la cámara no cambian). Las fotos ya guardadas no cambian.</p>
+      <p class="m" id="difEstado"></p>
+    </div>
   </section>
   <section>
     <h2>Firmware de las cámaras</h2>
@@ -32,11 +59,15 @@
     </div>
   </section>
 </main>
-<script src="/web/comun.js?v=4"></script>
+<script src="/web/comun.js?v=13"></script>
 <script>
+let duenos = [], taxisLista = [];
 async function cargar() {
   try {
     const [taxis, carreras] = await Promise.all([api('/api/panel/taxis'), api('/api/panel/carreras?limite=30')]);
+    const cambioTaxis = JSON.stringify(taxis.map(t => [t.id, t.nombre, t.dueno])) !== JSON.stringify(taxisLista.map(t => [t.id, t.nombre, t.dueno]));
+    taxisLista = taxis;
+    if (cambioTaxis) pintarDuenos();
     $('vacio').hidden = taxis.length > 0;
     const enLinea = taxis.filter(t => t.en_linea).length;
     const enCarrera = taxis.filter(t => t.estado === 'EN_CARRERA').length;
@@ -45,7 +76,8 @@ async function cargar() {
       <a class="card taxi" href="/taxi/${t.id}">
         ${t.ultima_foto ? `<img src="/fotos/${t.ultima_foto}" alt="">` : '<div class="sin-foto">Todavía sin fotos</div>'}
         <div class="fila"><b>${esc(t.nombre || t.id)}</b>${pill(t)}</div>
-        <div class="m">${t.id}${t.aprobado ? '' : ' · <span class="mal">pendiente de aprobar</span>'}${t.por_revisar ? ` · <span class="aviso-txt">${t.por_revisar} carrera${t.por_revisar === 1 ? '' : 's'} por revisar</span>` : ''}</div>
+        <div class="m">${t.id}${t.aprobado ? '' : ' · <span class="mal">pendiente de aprobar</span>'}${t.por_revisar ? ` · <span class="aviso-txt">${t.por_revisar} carrera${t.por_revisar === 1 ? '' : 's'} por revisar</span>` : ''}
+          · ${t.dueno ? 'dueño: ' + esc(nombreDueno(t.dueno)) : 'sin dueño'}</div>
         <div class="k">
           <div><b>${t.pax}</b><span>pasajeros</span></div>
           <div><b>${t.carreras_hoy}</b><span>carreras hoy</span></div>
@@ -67,7 +99,80 @@ $('fwsubir').onclick = async () => {
   const r = await fetch('/api/panel/firmware?version=' + encodeURIComponent(v), { method: 'POST', body: f });
   alert(r.ok ? 'Firmware ' + v + ' publicado.' : 'Error: ' + (await r.json()).detail);
 };
-cargar();
+
+// ---------------------------------------------------------------- dueños
+const nombreDueno = uid => { const d = duenos.find(x => x.id === uid); return d ? d.nombre || d.usuario : '?'; };
+const nombreTaxi = id => { const t = taxisLista.find(x => x.id === id); return t ? t.nombre || t.id : id; };
+async function cargarDuenos() {
+  duenos = await api('/api/panel/duenos');
+  pintarDuenos();
+}
+function pintarDuenos() {
+  const libres = taxisLista.filter(t => !t.dueno);
+  $('duenos').innerHTML = duenos.length ? duenos.map(d => `
+    <div class="dueno${d.activo ? '' : ' inactivo'}" data-id="${d.id}">
+      <div><b>${esc(d.nombre || d.usuario)}</b> <span class="m">usuario <b>${esc(d.usuario)}</b> · ${d.entro ? 'entró ' + hace(d.entro) : 'todavía no entra'}${d.activo ? '' : ' · desactivado'}</span>
+        <div>${d.taxis.map(t => `<span class="chip">${esc(nombreTaxi(t))}<button data-quitar="${esc(t)}" title="Quitar este taxi">✕</button></span>`).join(' ') || '<span class="m">sin taxis</span>'}</div></div>
+      <div class="acciones">
+        ${libres.length ? `<select data-asignar><option value="">+ Asignar taxi</option>${libres.map(t => `<option value="${esc(t.id)}">${esc(t.nombre || t.id)}</option>`).join('')}</select>` : ''}
+        <a href="/dueno?como=${d.id}" target="_blank">Ver su página</a>
+        <button class="fantasma" data-clave>Nueva clave</button>
+        <button class="fantasma" data-activo>${d.activo ? 'Desactivar' : 'Activar'}</button>
+      </div>
+    </div>`).join('') : '<p class="m">Todavía no hay cuentas de dueños.</p>';
+  $('duenos').querySelectorAll('.dueno').forEach(fila => {
+    const d = duenos.find(x => x.id === +fila.dataset.id);
+    const asignar = async (taxi, uid) => { await api('/api/panel/taxi/' + taxi, { dueno: uid }); await cargar(); cargarDuenos(); };
+    fila.querySelector('[data-asignar]')?.addEventListener('change', e => e.target.value && asignar(e.target.value, d.id));
+    fila.querySelectorAll('[data-quitar]').forEach(b => b.onclick = () =>
+      confirm(`¿Quitarle a ${d.nombre || d.usuario} el taxi ${nombreTaxi(b.dataset.quitar)}?`) && asignar(b.dataset.quitar, null));
+    fila.querySelector('[data-clave]').onclick = async () => {
+      const clave = prompt(`Clave nueva para ${d.usuario} (8 o más caracteres):`, claveAlAzar());
+      if (!clave) return;
+      try { await api('/api/panel/duenos/' + d.id, { clave }); alert(`Listo. Pásale al dueño:\nUsuario: ${d.usuario}\nClave: ${clave}\n\nSus sesiones abiertas se cerraron.`); }
+      catch (e) { alert(e.message); }
+    };
+    fila.querySelector('[data-activo]').onclick = async () => {
+      if (d.activo && !confirm(`${d.nombre || d.usuario} no podrá entrar hasta que la actives de nuevo. ¿Seguir?`)) return;
+      await api('/api/panel/duenos/' + d.id, { activo: !d.activo });
+      cargarDuenos();
+    };
+  });
+}
+// Clave fácil de dictar por teléfono: sin letras que se confunden (l, 1, O, 0).
+function claveAlAzar() {
+  const letras = 'abcdefghjkmnpqrstuvwxyz23456789', n = new Uint32Array(10);
+  crypto.getRandomValues(n);
+  return [...n].map(x => letras[x % letras.length]).join('');
+}
+$('nGenerar').onclick = () => { $('nClave').value = claveAlAzar(); };
+$('nCrear').onclick = async () => {
+  const usuario = $('nUsuario').value.trim().toLowerCase(), clave = $('nClave').value;
+  try {
+    await api('/api/panel/duenos', { usuario, nombre: $('nNombre').value.trim(), clave });
+    $('nMsg').innerHTML = `<span class="ok">✓ Cuenta creada.</span> Pásale al dueño: entra en <b>${esc(location.host)}</b> · usuario <b>${esc(usuario)}</b> · clave <b>${esc(clave)}</b>. Ahora asígnale su taxi.`;
+    $('nNombre').value = $('nUsuario').value = $('nClave').value = '';
+    cargarDuenos();
+  } catch (e) { $('nMsg').innerHTML = `<span class="mal">${esc(e.message)}</span>`; }
+};
+
+// ---------------------------------------------------------------- privacidad
+function pintarConfig(c) {
+  $('difuminar').checked = c.difuminar;
+  $('difEstado').innerHTML = c.difuminar ? '<span class="ok">✓ Activado: las fotos nuevas se guardan con las personas desenfocadas.</span>'
+    : 'Apagado: las fotos se guardan tal como las toma la cámara.';
+}
+$('difuminar').onchange = async () => {
+  const v = $('difuminar').checked;
+  if (v && !confirm('Desde ahora las personas quedan desenfocadas en las fotos guardadas, y eso no se puede deshacer en esas fotos. ¿Activar?')) {
+    $('difuminar').checked = false;
+    return;
+  }
+  pintarConfig(await api('/api/panel/config', { difuminar: v }));
+};
+api('/api/panel/config').then(pintarConfig).catch(() => {});
+
+cargarDuenos().finally(cargar);
 </script>
 </body>
 </html>

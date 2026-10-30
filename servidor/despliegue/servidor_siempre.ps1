@@ -36,7 +36,7 @@ if (Test-Path ".env") {
 Add-Type -Namespace Taxiff -Name Energia -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint f);'
 [Taxiff.Energia]::SetThreadExecutionState(0x80000001) | Out-Null
 
-$srv = $null; $tun = $null
+$srv = $null; $tun = $null; $sinPuerto = 0
 Anotar "inicio: servidor en el puerto $Puerto y túnel '$Tunel'"
 try {
   while ($true) {
@@ -47,7 +47,19 @@ try {
         -WorkingDirectory $servidor -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $logs "uvicorn_salida.log") -RedirectStandardError (Join-Path $logs "uvicorn_errores.log")
       Anotar "servidor levantado (proceso $($srv.Id))"
-    }
+      $sinPuerto = 0
+    } elseif (-not (Get-NetTCPConnection -LocalPort $Puerto -State Listen -ErrorAction SilentlyContinue)) {
+      # El lanzador del .venv puede quedar vivo minutos con el servidor real ya
+      # muerto: si pasa 1 min sin nadie en el puerto (ya arrancado), se reinicia.
+      $sinPuerto++
+      if ($sinPuerto -ge 4 -and ((Get-Date) - $srv.StartTime).TotalSeconds -gt 60) {
+        Anotar "el servidor no responde en el puerto ${Puerto}: se reinicia"
+        Get-CimInstance Win32_Process -Filter "ParentProcessId=$($srv.Id)" |
+          ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+        $sinPuerto = 0
+      }
+    } else { $sinPuerto = 0 }
     if ((Test-Path $cfg) -and (-not $tun -or $tun.HasExited)) {
       if ($tun) { Anotar "el túnel se detuvo (código $($tun.ExitCode)): se vuelve a levantar" }
       $tun = Start-Process $cf -ArgumentList "tunnel", "--no-autoupdate", "--config", "`"$cfg`"", "run", $Tunel `

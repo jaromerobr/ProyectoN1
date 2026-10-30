@@ -39,11 +39,26 @@ document.addEventListener('load', e => { if (e.target.tagName === 'IMG') e.targe
 document.addEventListener('error', e => { if (e.target.tagName === 'IMG') e.target.classList.add('lista', 'rota'); }, true);
 const cargando = texto => `<div class="cargando"><span class="giro"></span>${esc(texto || 'Cargando…')}</div>`;
 
+// Sin sesión (o vencida) se vuelve a la página de entrada. Los errores traen el
+// mensaje del servidor ("El odómetro no baja…") para mostrarlo tal cual.
 async function api(url, body) {
   const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
-  if (!r.ok) throw new Error(r.status);
+  if (r.status === 401) {
+    location.href = '/entrar?volver=' + encodeURIComponent(location.pathname + location.search);
+    throw new Error('Hay que entrar de nuevo');
+  }
+  if (!r.ok) {
+    let msg = 'Error ' + r.status;
+    try { msg = (await r.json()).detail || msg; } catch (e) {}
+    throw new Error(msg);
+  }
   return r.json();
 }
+
+// Dinero y distancias como se escriben en Ecuador: $2,10 · 5,1 km · 123.456 km.
+const plata = v => '$' + (v || 0).toFixed(2).replace('.', ',');
+const kms = v => (v || 0).toLocaleString('es-EC', { maximumFractionDigits: 1 }) + ' km';
+const kmEnteros = v => Math.round(v || 0).toLocaleString('es-EC') + ' km';
 
 function filaCarreraTitulo(conTaxi) {
   return `<tr class="m"><td>Inicio</td>${conTaxi ? '<td>Taxi</td>' : ''}<td>Duración</td><td>Pasajeros</td><td>Evidencia</td></tr>`;

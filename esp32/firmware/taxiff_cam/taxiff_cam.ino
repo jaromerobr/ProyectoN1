@@ -29,6 +29,7 @@
 #include "human_face_detect_mnp01.hpp"
 #include <taxiff-cabezas-v2_inferencing.h>
 #include "time.h"
+#include "esp_sntp.h"
 #include "mbedtls/aes.h"
 #include "mbedtls/base64.h"
 #include "lwip/sockets.h"
@@ -74,6 +75,8 @@ float detThr = 0.1F;    // umbral de la 1.ª etapa
 int jpegQ = 60;
 int frameSz = FRAMESIZE_QVGA;
 volatile bool restartPending = false;
+// Órdenes del panel sobre la WiFi: llegan en la tarea de envío y se hacen en el bucle principal.
+volatile bool pedirPortal = false, soltarRed = false;
 bool night = true;
 volatile bool reconfig = true;
 HumanFaceDetectMSR01 *s1 = nullptr;
@@ -210,11 +213,15 @@ void removeNetwork(const String &ssid) {
 // (TX-XXXXXX, de la MAC) y el token que el servidor le da al registrarse.
 // Sin internet, las fotos se guardan en /q y se suben después, las más viejas
 // primero.
-const char *FW_VERSION = "4.2";
+const char *FW_VERSION = "4.5";
 char devId[12];
 String srvUrl, devToken;
 char srvState[64] = "sin servidor configurado";
 uint32_t ajustesVer = 0;  // versión de los ajustes del panel que ya se aplicaron
+// Número de la última orden de WiFi del panel ya cumplida. Se guarda y se informa
+// siempre: si quitar la red en uso deja a la cámara sin internet, el servidor se
+// entera al volver y no repite la orden (si no, volvería a quitar la red recién agregada).
+uint32_t wifiOrden = 0;
 String cfgJson();
 void applySettings(const char *q);
 volatile uint32_t srvInterval = 5000, sentOk = 0, sentErr = 0, lastSentMs = 0;
@@ -286,6 +293,125 @@ String fmtTime(time_t t) {
   char b[24];
   strftime(b, sizeof b, "%d/%m %H:%M:%S", &tm);
   return b;
+}
+
+// ---- Reloj DS3231 (opcional): SDA en GPIO 41, SCL en GPIO 42, VCC a 3V3 ----
+// Con su pila guarda la hora (en UTC) aunque se corte la corriente: al arrancar
+// sin internet las fotos ya salen con hora. Cuando llega la hora de internet se
+// corrige. El I2C se maneja a mano (bit-bang) para no chocar con el driver I2C
+// que usa la cámara; el módulo trae sus resistencias de pull-up.
+const int RTC_SDA = 41, RTC_SCL = 42;
+const uint8_t RTC_DIR = 0x68;
+bool rtcOk = false;                // el módulo respondió
+volatile bool horaDeInternet = false;  // llegó la hora de internet: guardarla en el reloj
+char rtcEstado[80] = "sin revisar";  // se muestra en la página de la cámara
+
+static void i2cSuelta(int p) { pinMode(p, INPUT_PULLUP); }  // la línea sube sola (pull-up)
+static void i2cBaja(int p) {
+  pinMode(p, OUTPUT);
+  digitalWrite(p, LOW);
+}
+static void i2cPausa() { delayMicroseconds(5); }
+static void i2cStart() {  // también sirve de "start repetido"
+  i2cSuelta(RTC_SDA); i2cSuelta(RTC_SCL); i2cPausa();
+  i2cBaja(RTC_SDA); i2cPausa(); i2cBaja(RTC_SCL);
+}
+static void i2cStop() {
+  i2cBaja(RTC_SDA); i2cPausa(); i2cSuelta(RTC_SCL); i2cPausa(); i2cSuelta(RTC_SDA); i2cPausa();
+}
+static bool i2cEscribe(uint8_t b) {  // true = el reloj respondió (ACK)
+  for (int i = 7; i >= 0; i--) {
+    if ((b >> i) & 1) i2cSuelta(RTC_SDA); else i2cBaja(RTC_SDA);
+    i2cPausa(); i2cSuelta(RTC_SCL); i2cPausa(); i2cBaja(RTC_SCL);
+  }
+  i2cSuelta(RTC_SDA); i2cPausa(); i2cSuelta(RTC_SCL); i2cPausa();
+  bool ack = digitalRead(RTC_SDA) == LOW;
+  i2cBaja(RTC_SCL);
+  return ack;
+}
+static uint8_t i2cLee(bool ultimo) {
+  uint8_t b = 0;
+  i2cSuelta(RTC_SDA);
+  for (int i = 0; i < 8; i++) {
+    i2cPausa(); i2cSuelta(RTC_SCL); i2cPausa();
+    b = b << 1 | (digitalRead(RTC_SDA) == HIGH);
+    i2cBaja(RTC_SCL);
+  }
+  if (ultimo) i2cSuelta(RTC_SDA); else i2cBaja(RTC_SDA);  // NACK en el último byte
+  i2cPausa(); i2cSuelta(RTC_SCL); i2cPausa(); i2cBaja(RTC_SCL);
+  i2cSuelta(RTC_SDA);
+  return b;
+}
+static bool rtcLeer(uint8_t reg, uint8_t *buf, int n) {
+  i2cStart();
+  bool ok = i2cEscribe(RTC_DIR << 1) && i2cEscribe(reg);
+  if (ok) {
+    i2cStart();
+    ok = i2cEscribe(RTC_DIR << 1 | 1);
+  }
+  for (int i = 0; ok && i < n; i++) buf[i] = i2cLee(i == n - 1);
+  i2cStop();
+  return ok;
+}
+static bool rtcEscribir(uint8_t reg, const uint8_t *buf, int n) {
+  i2cStart();
+  bool ok = i2cEscribe(RTC_DIR << 1) && i2cEscribe(reg);
+  for (int i = 0; ok && i < n; i++) ok = i2cEscribe(buf[i]);
+  i2cStop();
+  return ok;
+}
+static uint8_t deBcd(uint8_t v) { return (v >> 4) * 10 + (v & 15); }
+static uint8_t aBcd(int v) { return (v / 10) << 4 | v % 10; }
+// Días desde el 1/1/1970 (sin depender de la zona horaria).
+static int64_t diasDesde1970(int y, int m, int d) {
+  y -= m <= 2;
+  int era = (y >= 0 ? y : y - 399) / 400, yoe = y - era * 400;
+  int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return (int64_t)era * 146097 + doe - 719468;
+}
+
+// Al arrancar: si el reloj está y tiene hora válida, el ESP32 la toma.
+void rtcIniciar() {
+  uint8_t estado, r[7];
+  rtcOk = rtcLeer(0x0F, &estado, 1);
+  if (!rtcOk) {
+    snprintf(rtcEstado, sizeof rtcEstado, "no conectado");
+    return;
+  }
+  // Salida de 32 kHz apagada (ahorra pila); el oscilador sigue andando con la pila.
+  uint8_t control = 0x1C;
+  rtcEscribir(0x0E, &control, 1);
+  if (estado & 0x80) {
+    snprintf(rtcEstado, sizeof rtcEstado, "conectado, sin hora (se pone en hora con internet)");
+    return;
+  }
+  if (!rtcLeer(0x00, r, 7) || (r[2] & 0x40)) {
+    snprintf(rtcEstado, sizeof rtcEstado, "conectado, hora ilegible (se corrige con internet)");
+    return;
+  }
+  time_t t = diasDesde1970(2000 + deBcd(r[6]), deBcd(r[5] & 0x1F), deBcd(r[4])) * 86400 +
+             deBcd(r[2] & 0x3F) * 3600 + deBcd(r[1]) * 60 + deBcd(r[0] & 0x7F);
+  if (t < 1700000000) {
+    snprintf(rtcEstado, sizeof rtcEstado, "conectado, hora vieja (se corrige con internet)");
+    return;
+  }
+  struct timeval tv = {t, 0};
+  settimeofday(&tv, nullptr);
+  snprintf(rtcEstado, sizeof rtcEstado, "conectado, la hora salió del reloj: %s", fmtTime(t).c_str());
+}
+
+// Guarda en el reloj la hora actual (después de recibir la de internet).
+void rtcGuardar() {
+  time_t t = nowEpoch();
+  if (!rtcOk || !t) return;
+  struct tm g;
+  gmtime_r(&t, &g);
+  uint8_t r[7] = {aBcd(g.tm_sec), aBcd(g.tm_min), aBcd(g.tm_hour), (uint8_t)(g.tm_wday + 1),
+                  aBcd(g.tm_mday), aBcd(g.tm_mon + 1), aBcd(g.tm_year % 100)};
+  uint8_t estado = 0;  // borra "perdió la hora" (OSF) y deja apagada la salida de 32 kHz
+  if (rtcEscribir(0x00, r, 7) && rtcEscribir(0x0F, &estado, 1))
+    snprintf(rtcEstado, sizeof rtcEstado, "conectado, en hora con internet (%s)", fmtTime(t).c_str());
 }
 
 bool initCamera() {
@@ -449,7 +575,7 @@ $('devid').textContent=d.id;if(document.activeElement!==$('srv'))$('srv').value=
 $('srvinfo').textContent=d.srv?`${d.srv_estado} · ${d.enviadas} fotos enviadas${d.ult_envio_s>=0?' (última hace '+d.ult_envio_s+' s)':''} · ${d.en_cola} en cola sin internet · ritmo ${d.intervalo_ms/1000} s`:'No envía a ningún servidor.';
 $('mname').textContent=d.cfg.model=='caras'?'caras (Espressif)':d.modelo;
 const mb=d.fotos_libre_kb/1024,libre=mb>=1024?(mb/1024).toFixed(1)+' GB':mb.toFixed(1)+' MB';
-$('capinfo').textContent=(d.almacen=='sd'?`Tarjeta SD de ${d.sd_gb} GB`:d.almacen=='interna'?'Sin tarjeta SD: memoria interna':'Sin memoria')+` · ${d.fotos} fotos guardadas · libre ${libre} (≈ ${Math.floor(d.fotos_libre_kb/12).toLocaleString()} fotos más)`;
+$('capinfo').textContent=(d.almacen=='sd'?`Tarjeta SD de ${d.sd_gb} GB`:d.almacen=='interna'?'Sin tarjeta SD: memoria interna':'Sin memoria')+` · ${d.fotos} fotos guardadas · libre ${libre} (≈ ${Math.floor(d.fotos_libre_kb/12).toLocaleString()} fotos más)`+(d.reloj?` · Reloj: ${d.reloj}`:'');
 $('met').innerHTML=(d.cam_ok?'':'<b style="color:var(--bad)">LA CÁMARA NO ENVÍA IMAGEN: reiniciándola…</b><br>')+(d.cam_reinits?`Reinicios de cámara: ${d.cam_reinits}<br>`:'')+`Temperatura del chip: <b style="color:${tc};font-size:20px">${d.temp} °C</b> (máx. ${d.tmax} °C)${d.hot?' · <b style="color:var(--bad)">MUY CALIENTE: va más lento para enfriarse</b>':''}${bar(d.temp,tc)}`+
 `CPU ocupada: <b>${d.busy}%</b>${bar(d.busy,d.busy>85?'var(--warn)':'var(--ok)')}`+
 `Por foto: cámara ${d.cam_ms} ms · detección ${d.det_ms} ms · JPEG ${d.jpg_ms} ms<br>Enviando al servidor: ${d.kbs} KB/s (≈ ${Math.round(d.kbs*3.6)} MB/hora) · ${d.fps} fps`;}catch(e){}setTimeout(info,2000)}
@@ -624,6 +750,21 @@ String urlDecode(const String &s) {
       o += (char)strtol(s.substring(i + 1, i + 3).c_str(), nullptr, 16);
       i += 2;
     } else o += ch;
+  }
+  return o;
+}
+
+// Para mandar nombres de red en cabeceras HTTP, que solo admiten ASCII.
+String urlEncode(const String &s) {
+  String o;
+  char b[4];
+  for (size_t i = 0; i < s.length(); i++) {
+    uint8_t c = s[i];
+    if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') o += (char)c;
+    else {
+      snprintf(b, sizeof b, "%%%02X", c);
+      o += b;
+    }
   }
   return o;
 }
@@ -807,6 +948,7 @@ esp_err_t handleStatus(httpd_req_t *req) {
              ",\"almacen\":\"" + (sdOk ? "sd" : fatOk ? "interna" : "ninguno") + "\"" +
              ",\"errores_memoria\":" + String(storeErrors) + ",\"prueba_sin_wifi\":" + String(sinWifi ? 1 : 0) +
              ",\"sd_gb\":" + String(sdOk ? SD_MMC.cardSize() / 1073741824.0 : 0, 1) +
+             ",\"reloj\":\"" + String(rtcEstado) + "\"" +
              ",\"net\":\"" + (WiFi.status() != WL_CONNECTED ? String("Red propia ") + AP_SSID : "WiFi " + WiFi.SSID() + " · " + WiFi.localIP().toString()) +
              "\",\"trips\":[";
   for (int i = 0; i < tripCount; i++) {
@@ -1119,6 +1261,16 @@ int srvPost(const char *path, const char *ctype, const uint8_t *buf, size_t len,
   http.addHeader("X-Cfg", cfgJson());
   http.addHeader("X-Ajustes-Ver", String(ajustesVer));
   http.addHeader("X-Ip", WiFi.localIP().toString());
+  // Redes guardadas (separadas por tab) y la conectada: el panel las muestra y
+  // permite quitarlas. En formato URL, porque las cabeceras solo admiten ASCII.
+  String redes;
+  for (auto &r : loadNetworks()) {
+    if (redes.length()) redes += "%09";
+    redes += urlEncode(r.ssid);
+  }
+  http.addHeader("X-Redes", redes);
+  http.addHeader("X-Red", urlEncode(WiFi.SSID()));
+  http.addHeader("X-Wifi-Orden", String(wifiOrden));
   int code = http.POST((uint8_t *)buf, len);
   body = code > 0 ? http.getString() : "";
   http.end();
@@ -1157,6 +1309,25 @@ bool handleReply(int code, const String &body, uint32_t count) {
       prefs.putUInt("ajv", ajustesVer);  // antes de aplicar: si cambia la resolución, la placa se reinicia
       applySettings(q.c_str());
     }
+    // Órdenes del panel sobre la WiFi: quitar redes guardadas (nombres en formato
+    // URL, separados por tab) y abrir Taxiff-Cam 10 min. El servidor repite la
+    // orden hasta que la cámara informa su número (wifiOrden) como cumplida.
+    int w = body.indexOf("\"wifi_olvidar\":\"");
+    long orden = jsonNumber(body, "wifi_orden", -1);
+    if (w >= 0 && orden > (long)wifiOrden) {
+      wifiOrden = orden;
+      prefs.putUInt("wifo", wifiOrden);  // antes de quitar: si se pierde la WiFi, igual queda anotada
+      String lista = urlDecode(body.substring(w + 16, body.indexOf('"', w + 16))) + "\t";
+      auto guardadas = loadNetworks();
+      for (int i = 0, t; (t = lista.indexOf('\t', i)) >= 0; i = t + 1) {
+        String s = lista.substring(i, t);
+        if (!s.length() || std::none_of(guardadas.begin(), guardadas.end(), [&](const Red &r) { return r.ssid == s; })) continue;
+        removeNetwork(s);
+        logEvent("red WiFi quitada desde el panel: %s", s.c_str());
+        if (s == WiFi.SSID()) soltarRed = true;
+      }
+    }
+    if (body.indexOf("\"abrir_portal\":true") >= 0) pedirPortal = true;
     sentOk += count;
     lastSentMs = millis();
     snprintf(srvState, sizeof srvState, "conectada");
@@ -1910,6 +2081,7 @@ void startUploader() {
   srvUrl = prefs.getString("srv", "");
   devToken = prefs.getString("tok", "");
   ajustesVer = prefs.getUInt("ajv", 0);
+  wifiOrden = prefs.getUInt("wifo", 0);
   if (srvUrl.length()) snprintf(srvState, sizeof srvState, "conectando…");
   if (storeOk()) queueInit();
   Serial.printf("# camara %s · servidor: %s · %u fotos en cola\n", devId,
@@ -2082,6 +2254,11 @@ void setup() {
   // sigue en hora, pero sin esto se mostraba en UTC (5 h adelantada).
   setenv("TZ", "<-05>5", 1);
   tzset();
+  // Con el reloj DS3231 la hora se sabe desde el arranque, aun sin internet;
+  // cada vez que llega la de internet se le vuelve a guardar (ver loop).
+  rtcIniciar();
+  Serial.printf("# reloj DS3231: %s\n", rtcEstado);
+  sntp_set_time_sync_notification_cb([](struct timeval *) { horaDeInternet = true; });
   bootReason = resetReason();
   // Historial de reinicios (sobrevive a los reinicios): para saber si las
   // desconexiones son por falta de corriente (brownout) o por un fallo.
@@ -2126,6 +2303,7 @@ void setup() {
   logEvent("ARRANQUE: %s · firmware %s · %s", bootReason.c_str(), FW_VERSION,
            sdOk ? "con tarjeta SD" : "SIN TARJETA SD (guarda en la memoria interna)");
   if (sinWifi) logEvent("PRUEBA SIN WiFi: actúa como si no viera ninguna red (CONWIFI para terminar)");
+  if (rtcOk) logEvent("reloj DS3231 %s", rtcEstado);
   loadConfig();
   // Cuando se pierde una foto (WiFi, escritura en memoria, 640x480) la tarea
   // de la cámara imprime "EV-EOF-OVF" y su pila es tan pequeña que imprimir la
@@ -2336,6 +2514,23 @@ void loop() {
     else if (millis() - bootPressed > 3000 && !apMode) startPortal(10 * 60 * 1000UL);
   } else {
     bootPressed = 0;
+  }
+  if (horaDeInternet) {  // llegó (o se renovó) la hora de internet: el reloj la guarda
+    horaDeInternet = false;
+    bool antes = strncmp(rtcEstado, "conectado, en hora", 18) == 0;
+    rtcGuardar();
+    if (rtcOk && !antes) logEvent("reloj DS3231 %s", rtcEstado);
+  }
+  // Órdenes del panel (ver handleReply).
+  if (pedirPortal) {
+    pedirPortal = false;
+    if (!apMode) startPortal(10 * 60 * 1000UL);
+  }
+  if (soltarRed) {
+    soltarRed = false;
+    logEvent("se quitó la red en uso: se desconecta y busca otra guardada");
+    WiFi.disconnect();
+    if (loadNetworks().empty() && !apMode) startPortal(0xFFFFFFFF / 2);  // sin redes: Taxiff-Cam queda abierta
   }
   if (restartPending) {
     logEvent("reinicio pedido (cambio de resolución)");

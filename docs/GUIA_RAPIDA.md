@@ -9,6 +9,10 @@
 >
 > **Desde el 25/10/2026 el servidor tiene dirección fija: https://taxiff.site**
 > - **Panel:** usuario `admin` y la clave de `servidor/.env` (`TAXIFF_CLAVE_PANEL`).
+> - **Dueños (desde el 26/10/2026):**
+>   - En el panel, sección **Dueños** → *Crear cuenta de dueño* (o *Generar clave*) → *Asignar taxi*. Pásale al dueño la dirección taxiff.site, su usuario y su clave.
+>   - El dueño entra en la misma dirección y ve solo sus carreras, con el cobro y los km estimados, y su kilometraje. No ve fotos.
+>   - *Ver su página* te muestra lo mismo que ve el dueño.
 > - **Arranque:** la PC lo arranca sola al iniciar sesión (tarea "Taxiff servidor"), junto con el túnel fijo.
 > - **Ya no hace falta** `iniciar_pc.ps1 -Tunel` ni reconfigurar la cámara: siempre envía a `https://taxiff.site`.
 > - **Detalles:** [DESPLIEGUE.md](DESPLIEGUE.md).
